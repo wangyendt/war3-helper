@@ -238,6 +238,15 @@ namespace War3Helper
         [DllImport("user32.dll")]
         public static extern bool SetProcessDPIAware();
 
+        // 第二个实例用来把已在运行的窗口叫到前台
+        public const int HWND_BROADCAST = 0xFFFF;
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        public static extern uint RegisterWindowMessage(string lpString);
+
+        [DllImport("user32.dll")]
+        public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
         [DllImport("user32.dll")]
         public static extern uint MapVirtualKey(uint uCode, uint uMapType);
 

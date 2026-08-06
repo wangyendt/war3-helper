@@ -19,6 +19,11 @@ namespace War3Helper
 
     static class Program
     {
+        // 第二个实例启动时，广播这条消息把已在运行的窗口叫到前台，然后自己安静退出。
+        // 以前是弹一个"已在运行"的框，用户双击后看不到窗口，会以为程序坏了。
+        public static readonly uint WM_SHOW_EXISTING =
+            Native.RegisterWindowMessage("War3Helper_ShowExistingWindow");
+
         [STAThread]
         static void Main()
         {
@@ -27,7 +32,8 @@ namespace War3Helper
             {
                 if (!createdNew)
                 {
-                    MessageBox.Show("War3助手已在运行（请查看系统托盘）。", "提示");
+                    Native.PostMessage(new IntPtr(Native.HWND_BROADCAST), WM_SHOW_EXISTING,
+                                       IntPtr.Zero, IntPtr.Zero);
                     return;
                 }
                 try { Native.SetProcessDPIAware(); }

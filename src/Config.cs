@@ -141,6 +141,8 @@ namespace War3Helper
         public List<Reminder> Reminders { get; set; }
         public List<VersionSource> VersionSources { get; set; }
 
+        // 这两个是派生属性，不写进 json（否则 ActiveScheme 会把方案整份重复存一遍）
+        [ScriptIgnore]
         public LaunchMode Launch
         {
             get { return (LaunchMode)LaunchModeValue; }
@@ -172,32 +174,54 @@ namespace War3Helper
                 }
 
                 string roaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                if (string.IsNullOrEmpty(roaming))
+                {
+                    // 只有连 %APPDATA% 都拿不到时才退回 exe 目录
+                    _configPath = portable;
+                    return _configPath;
+                }
+
                 string dir = Path.Combine(roaming, AppDataDirName);
                 string appData = Path.Combine(dir, "config.json");
-                try
+
+                // 先把位置定死。下面的迁移全是"锦上添花"，任何一步失败都不能改变配置位置 ——
+                // 之前这里出异常会悄悄退回 exe 目录，而那儿没有配置文件，
+                // 结果就是加载出一份全新的默认配置，用户看着就像"设置全没了"。
+                // 触发条件很常见：两个实例几乎同时启动时，File.Copy(..., overwrite:false)
+                // 会因为对方刚建好文件而抛异常。
+                _configPath = appData;
+
+                try { Directory.CreateDirectory(dir); }
+                catch { }
+
+                if (!File.Exists(appData))
                 {
-                    Directory.CreateDirectory(dir);
-
-                    // 程序改名前配置在 %APPDATA%\WshHelper，搬过来，别让老用户丢方案
-                    if (!File.Exists(appData))
+                    // 程序改名前配置在 %APPDATA%\WshHelper
+                    TryImport(Path.Combine(Path.Combine(roaming, LegacyAppDataDirName), "config.json"), appData);
+                }
+                if (!File.Exists(appData) && File.Exists(portable))
+                {
+                    // 更早的版本把配置放在 exe 目录
+                    if (TryImport(portable, appData))
                     {
-                        string legacy = Path.Combine(Path.Combine(roaming, LegacyAppDataDirName), "config.json");
-                        if (File.Exists(legacy)) File.Copy(legacy, appData, false);
-                    }
-
-                    // 更早的版本把配置放在 exe 目录，同样搬过来
-                    if (!File.Exists(appData) && File.Exists(portable))
-                    {
-                        File.Copy(portable, appData, false);
                         try { File.Move(portable, portable + ".migrated"); }
                         catch { }
                     }
                 }
-                catch { _configPath = portable; return _configPath; }
-
-                _configPath = appData;
                 return _configPath;
             }
+        }
+
+        // 把 from 搬到 to。失败(包括并发下对方已经建好)都不算错，
+        // 只要 to 最终存在就当成功。
+        static bool TryImport(string from, string to)
+        {
+            try
+            {
+                if (File.Exists(from)) File.Copy(from, to, false);
+            }
+            catch { }
+            return File.Exists(to);
         }
 
         public static bool IsPortableConfig
@@ -209,11 +233,17 @@ namespace War3Helper
             }
         }
 
+        // 配置文件存在但读不出来时的提示，由主界面在启动后显示
+        public static string LoadWarning;
+
         public static AppConfig Load()
         {
+            LoadWarning = null;
+            bool existed = false;
             try
             {
-                if (File.Exists(ConfigPath))
+                existed = File.Exists(ConfigPath);
+                if (existed)
                 {
                     string json = File.ReadAllText(ConfigPath, Encoding.UTF8);
                     JavaScriptSerializer ser = new JavaScriptSerializer();
@@ -221,7 +251,23 @@ namespace War3Helper
                     if (c != null) { c.FixUp(); return c; }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                LoadWarning = ex.Message;
+            }
+
+            // 文件明明在、却没读出来 —— 绝不能默默套用默认值然后被第一次保存覆盖掉。
+            // 先把它挪到一边留证，用户还能手工找回来。
+            if (existed)
+            {
+                string saved = ConfigPath + ".broken-" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json";
+                try { File.Move(ConfigPath, saved); }
+                catch { saved = ConfigPath; }
+                LoadWarning = "配置文件读取失败，已改用默认设置。\r\n\r\n" +
+                              "原文件没有被覆盖，已保留为:\r\n" + saved +
+                              (LoadWarning != null ? "\r\n\r\n错误: " + LoadWarning : "");
+            }
+
             AppConfig d = new AppConfig();
             d.SetDefaults();
             d.FixUp();      // 补齐派生项(如版本包目录)并做一次范围校验
@@ -464,6 +510,7 @@ namespace War3Helper
             if (string.IsNullOrEmpty(VerSourceDir)) VerSourceDir = War3Version.DefaultSourceDir(War3Path);
         }
 
+        [ScriptIgnore]
         public Scheme ActiveScheme
         {
             get { return Schemes[CurrentScheme]; }

@@ -273,6 +273,25 @@ static class EngineTests
               "letters and digits type as real key presses");
         Check(!Engine.CanTypeAsRealKey('中'), "Chinese falls back to Unicode injection");
 
+        // --- 5b) 配置路径：任何迁移失败都不能把位置退回 exe 目录 ---
+        // 以前这里出异常会悄悄改用 exe 目录，而那儿没有配置文件，
+        // 于是加载出一份全新的默认配置 —— 用户看到的就是"设置全没了"。
+        // 触发条件很常见：两个实例几乎同时启动，File.Copy(overwrite:false) 会抛异常。
+        Console.WriteLine("\n[5b] config path never silently relocates");
+        string cfgPath = AppConfig.ConfigPath;
+        string roaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        bool underAppData = !string.IsNullOrEmpty(roaming) &&
+            cfgPath.StartsWith(System.IO.Path.Combine(roaming, "War3Helper"),
+                               StringComparison.OrdinalIgnoreCase);
+        bool hasPortableMarker = System.IO.File.Exists(
+            System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "portable.txt"));
+        Check(hasPortableMarker || underAppData,
+              "resolves to %APPDATA%\\War3Helper (got " + cfgPath + ")");
+        Check(hasPortableMarker || !AppConfig.IsPortableConfig,
+              "does not fall back to the exe directory");
+        // 重复取值必须稳定
+        Check(AppConfig.ConfigPath == cfgPath, "path is stable across calls");
+
         // --- 6) 配置持久化：保存后重新载入，方案不能丢 ---
         Console.WriteLine("\n[6] config round trip");
         AppConfig reloaded = RoundTrip(cfg);

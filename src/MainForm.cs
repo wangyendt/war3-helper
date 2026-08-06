@@ -207,6 +207,16 @@ namespace War3Helper
             timerMain.Interval = 300;
             timerMain.Tick += OnMainTick;
             timerMain.Start();
+
+            if (AppConfig.LoadWarning != null)
+            {
+                string w = AppConfig.LoadWarning;
+                BeginInvoke((Action)delegate
+                {
+                    MessageBox.Show(this, w, "配置读取失败",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                });
+            }
         }
 
         protected override void WndProc(ref Message m)
@@ -214,6 +224,12 @@ namespace War3Helper
             if (m.Msg == Native.WM_HOTKEY && m.WParam.ToInt32() == HOTKEY_BOSS)
             {
                 War3Ctl.ToggleBoss();
+                return;
+            }
+            // 又双击了一次程序 -> 把本窗口叫到前台，而不是让用户以为没反应
+            if (Program.WM_SHOW_EXISTING != 0 && m.Msg == (int)Program.WM_SHOW_EXISTING)
+            {
+                RestoreFromTray();
                 return;
             }
             base.WndProc(ref m);
