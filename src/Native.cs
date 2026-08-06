@@ -185,6 +185,9 @@ namespace WshHelper
         public static extern short GetAsyncKeyState(int vKey);
 
         [DllImport("user32.dll")]
+        public static extern short GetKeyState(int vKey);
+
+        [DllImport("user32.dll")]
         public static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
 
         [DllImport("user32.dll")]

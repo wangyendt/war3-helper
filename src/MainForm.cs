@@ -98,7 +98,9 @@ namespace WshHelper
         CheckBox chkRemap, chkCombo, chkWin, chkHeroFirst;
         CaptureBox[] capItems = new CaptureBox[6];
         ListView lvMaps;
-        CaptureBox capSrc, capDst, capSuspend;
+        CaptureBox capSrc, capDst, capSuspend, capShopEnter, capShopExit;
+        CheckBox chkAutoNumLock, chkShopMode, chkShopWheel;
+        Label lblNumLock;
         ComboBox cmbSchemes, cmbInject;
         CheckBox chkDiag;
         // 喊话页
@@ -146,7 +148,7 @@ namespace WshHelper
 
             Text = "WSH魔兽助手 (U9WSH复刻增强版)";
             Font = new Font("Microsoft YaHei UI", 9F);
-            ClientSize = new Size(720, 560);
+            ClientSize = new Size(720, 640);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -174,6 +176,13 @@ namespace WshHelper
             Engine.HotToggleBars += delegate { BeginInvoke((Action)ActToggleHpBars); };
             Engine.HotToggleApm += delegate { BeginInvoke((Action)ActToggleApm); };
             Engine.HotTimerReset += delegate { BeginInvoke((Action)ActStartTimer); };
+            Engine.ShopModeChanged += delegate
+            {
+                BeginInvoke((Action)delegate
+                {
+                    overlay.FlashMessage(Engine.ShopMode ? "商店模式: 改键已挂起" : "改键已恢复", 1800);
+                });
+            };
 
             replayWatcher = new ReplayWatcher();
             replayWatcher.Saved += delegate(string s)
@@ -312,13 +321,19 @@ namespace WshHelper
             Engine.WatchdogTick();      // 钩子被系统摘掉时自动重装
             War3Ctl.MaintainClip(cfg.AutoLockMouse);
             Engine.TickBars();
+            if (tickCount % 7 == 0) Engine.TickNumLock();
+            if (lblNumLock != null)
+                lblNumLock.Text = Engine.NumLockProblem
+                    ? "⚠ NumLock 是关的，小键盘物品栏改键会失效！"
+                    : (Engine.MapsToNumpad ? "NumLock 已开启，物品栏改键可正常工作" : "");
             if (iconForm != null) iconForm.Sync();
             bool found = War3Ctl.CachedMainWindow() != IntPtr.Zero;
             string bars = cfg.ShowHpBars ? (Engine.BarsActive ? "开(生效中)" : "开(待机)") : "关";
             string hook = Engine.ReinstallCount > 0 ? "  钩子已自动重装" + Engine.ReinstallCount + "次" : "";
             lblStatus.Text = string.Format("魔兽: {0}    改键: {1}    方案: {2}    血条常显: {3}    老板键: {4}{5}",
                 found ? (Engine.War3Foreground() ? "游戏中" : "已找到") : "未运行",
-                Engine.SuspendHeld ? "已临时停用" : (cfg.RemapEnabled ? "开" : "关"),
+                Engine.ShopMode ? "商店模式(已挂起)"
+                    : (Engine.SuspendHeld ? "已临时停用" : (cfg.RemapEnabled ? "开" : "关")),
                 cfg.ActiveScheme.Name,
                 bars,
                 KeyNames.Name(cfg.BossKey),
@@ -329,11 +344,11 @@ namespace WshHelper
         void BuildUi()
         {
             TabControl tabs = new TabControl();
-            tabs.Bounds = new Rectangle(0, 0, 720, 535);
+            tabs.Bounds = new Rectangle(0, 0, 720, 615);
             Controls.Add(tabs);
 
             lblStatus = new Label();
-            lblStatus.Bounds = new Rectangle(8, 539, 710, 20);
+            lblStatus.Bounds = new Rectangle(8, 619, 710, 20);
             lblStatus.ForeColor = Color.DimGray;
             Controls.Add(lblStatus);
 
@@ -410,12 +425,84 @@ namespace WshHelper
             };
             tp.Controls.Add(chkHeroFirst);
 
+            lblNumLock = new Label();
+            lblNumLock.Bounds = new Rectangle(14, 200, 336, 20);
+            lblNumLock.ForeColor = Color.FromArgb(180, 60, 0);
+            tp.Controls.Add(lblNumLock);
+
+            chkAutoNumLock = new CheckBox();
+            chkAutoNumLock.Text = "自动开启 NumLock (物品栏改键必需)";
+            chkAutoNumLock.Bounds = new Rectangle(14, 220, 300, 22);
+            chkAutoNumLock.CheckedChanged += delegate
+            {
+                if (loading) return;
+                cfg.AutoNumLock = chkAutoNumLock.Checked;
+                cfg.Save();
+                if (cfg.AutoNumLock) Engine.EnsureNumLock();
+            };
+            tp.Controls.Add(chkAutoNumLock);
+
+            GroupBox gShop = new GroupBox();
+            gShop.Text = "商店模式 (进商店时挂起全部改键)";
+            gShop.Bounds = new Rectangle(12, 246, 330, 126);
+            tp.Controls.Add(gShop);
+
+            chkShopMode = new CheckBox();
+            chkShopMode.Text = "启用商店模式";
+            chkShopMode.Bounds = new Rectangle(14, 22, 120, 22);
+            chkShopMode.CheckedChanged += delegate
+            {
+                if (loading) return;
+                cfg.ShopModeEnabled = chkShopMode.Checked;
+                if (!cfg.ShopModeEnabled) Engine.ExitShopMode();
+                cfg.Save();
+            };
+            gShop.Controls.Add(chkShopMode);
+
+            chkShopWheel = new CheckBox();
+            chkShopWheel.Text = "滚轮上/下 进入";
+            chkShopWheel.Bounds = new Rectangle(146, 22, 140, 22);
+            chkShopWheel.CheckedChanged += delegate
+            {
+                if (loading) return;
+                cfg.ShopEnterOnWheel = chkShopWheel.Checked;
+                cfg.Save();
+            };
+            gShop.Controls.Add(chkShopWheel);
+
+            Label lse = new Label(); lse.Text = "另一个进入键:"; lse.Bounds = new Rectangle(14, 54, 90, 20);
+            gShop.Controls.Add(lse);
+            capShopEnter = new CaptureBox();
+            capShopEnter.Bounds = new Rectangle(108, 50, 90, 24);
+            capShopEnter.VkChanged += delegate
+            {
+                if (loading) return;
+                cfg.ShopEnterKey = capShopEnter.Vk; cfg.Save();
+            };
+            gShop.Controls.Add(capShopEnter);
+
+            Label lsx = new Label(); lsx.Text = "恢复改键的键:"; lsx.Bounds = new Rectangle(14, 84, 90, 20);
+            gShop.Controls.Add(lsx);
+            capShopExit = new CaptureBox();
+            capShopExit.Bounds = new Rectangle(108, 80, 90, 24);
+            capShopExit.VkChanged += delegate
+            {
+                if (loading) return;
+                cfg.ShopExitKey = capShopExit.Vk; cfg.Save();
+            };
+            gShop.Controls.Add(capShopExit);
+            Label lsx2 = new Label();
+            lsx2.Text = "(默认F1=重选英雄)";
+            lsx2.Bounds = new Rectangle(204, 84, 120, 20);
+            lsx2.ForeColor = Color.DimGray;
+            gShop.Controls.Add(lsx2);
+
             Label lsus = new Label();
-            lsus.Text = "按住此键临时停用改键:";
-            lsus.Bounds = new Rectangle(14, 202, 150, 20);
+            lsus.Text = "或按住此键临时停用:";
+            lsus.Bounds = new Rectangle(14, 380, 140, 20);
             tp.Controls.Add(lsus);
             capSuspend = new CaptureBox();
-            capSuspend.Bounds = new Rectangle(166, 198, 100, 24);
+            capSuspend.Bounds = new Rectangle(156, 376, 100, 24);
             capSuspend.VkChanged += delegate
             {
                 if (loading) return;
@@ -424,17 +511,9 @@ namespace WshHelper
             };
             tp.Controls.Add(capSuspend);
 
-            Label hint = new Label();
-            hint.Text = "· 勾选后按物品键会先按F1，避免在商店误买。\r\n" +
-                        "· 按住停用键时改键全部放行，S 就还是 S。\r\n" +
-                        "· 点击输入框后按键设置，双击清除。";
-            hint.Bounds = new Rectangle(14, 226, 336, 62);
-            hint.ForeColor = Color.DimGray;
-            tp.Controls.Add(hint);
-
             GroupBox gScheme = new GroupBox();
             gScheme.Text = "改键方案 (Ctrl+F3 游戏中切换)";
-            gScheme.Bounds = new Rectangle(12, 290, 330, 100);
+            gScheme.Bounds = new Rectangle(12, 408, 330, 100);
             tp.Controls.Add(gScheme);
 
             cmbSchemes = new ComboBox();
@@ -535,7 +614,7 @@ namespace WshHelper
 
             GroupBox gDiag = new GroupBox();
             gDiag.Text = "改键不生效时用这里排查";
-            gDiag.Bounds = new Rectangle(12, 396, 330, 108);
+            gDiag.Bounds = new Rectangle(354, 470, 350, 108);
             tp.Controls.Add(gDiag);
 
             Label lim = new Label();
@@ -1347,14 +1426,20 @@ namespace WshHelper
 "  英文按真实键盘按键逐字敲入(和你自己打字一样)，兼容性最好；\r\n" +
 "  中文只能靠Unicode注入，部分魔兽版本可能收不到。\r\n" +
 "  发不出来时，把喊话页下方的\"发送速度\"两个值调大再试。\r\n\r\n" +
+"【NumLock —— 物品栏改键失效多半是这个原因】\r\n" +
+"  魔兽的物品栏快捷键是小键盘 7 8 4 5 1 2。NumLock 关闭时，这几个键在系统层面\r\n" +
+"  根本就是 Home/↑/←/Clear/End/↓，游戏收到的是方向键，物品栏改键自然全部落空。\r\n" +
+"  助手默认勾选\"自动开启 NumLock\"，会替你把它打开 —— 键盘上没有NumLock键也没关系，\r\n" +
+"  助手是用合成按键切换的。改键页会显示当前 NumLock 状态。\r\n\r\n" +
 "【在商店里不想改键怎么办】\r\n" +
-"  改键页有两个办法:\r\n" +
-"  1. \"按住此键临时停用改键\": 设一个顺手的键(建议用不常用的键)，在商店里按住它，\r\n" +
-"     所有改键全部原样放行 —— 比如你把S改成了别的键，按住它时S就还是S，能正常买树枝。\r\n" +
-"  2. \"物品键先选中英雄(F1)\": 只影响物品栏6个键，按下时先按一下F1选中英雄，\r\n" +
-"     这样选中商店/小兵时按物品键也不会误买。\r\n" +
+"  改键页有三个办法:\r\n" +
+"  1. 商店模式(推荐): 勾\"启用商店模式\"，设好\"进入键\"(可以直接用滚轮上/下)和\r\n" +
+"     \"恢复键\"(默认F1)。滚一下滚轮就挂起全部改键，S 就还是 S，能正常买树枝;\r\n" +
+"     按 F1 重新选中英雄时自动恢复改键。状态栏和悬浮窗会提示当前处于商店模式。\r\n" +
+"  2. \"按住此键临时停用改键\": 按住期间全部改键原样放行。\r\n" +
+"  3. \"物品键先选中英雄(F1)\": 只影响物品栏6个键，按下时先按一下F1选中英雄。\r\n" +
 "  说明: 真正去判断\"当前选中的是不是商店\"必须读游戏内存，本工具刻意不做那件事，\r\n" +
-"  所以只能用上面这两种由你自己控制的方式。\r\n\r\n" +
+"  所以只能用上面这几种由你自己的操作来控制的方式。\r\n\r\n" +
 "【改键不生效时怎么排查】\r\n" +
 "  改键页最下方\"改键不生效时用这里排查\":\r\n" +
 "  · 勾上\"记录诊断日志\"，进游戏按几下改键的键，回来点\"打开日志\"。\r\n" +
@@ -1569,6 +1654,11 @@ namespace WshHelper
             chkIcon.Checked = cfg.InGameIcon;
             chkHeroFirst.Checked = cfg.ItemKeySelectHeroFirst;
             capSuspend.Vk = cfg.SuspendKey;
+            chkAutoNumLock.Checked = cfg.AutoNumLock;
+            chkShopMode.Checked = cfg.ShopModeEnabled;
+            chkShopWheel.Checked = cfg.ShopEnterOnWheel;
+            capShopEnter.Vk = cfg.ShopEnterKey;
+            capShopExit.Vk = cfg.ShopExitKey;
             cmbInject.SelectedIndex = cfg.InjectMode;
             chkDiag.Checked = Diag.Enabled;
             numEnterDelay.Value = Math.Max(30, Math.Min(2000, cfg.ChatEnterDelay));

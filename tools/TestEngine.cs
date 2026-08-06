@@ -63,6 +63,20 @@ static class EngineTests
         Check(!Engine.IsItemSlotSource(Native.VK_XBUTTON1), "side button 1 is not an item-slot key");
         Check(!Engine.TryGetMapping((int)'Q', out dst), "unmapped key stays unmapped");
 
+        // --- 2b) 必须能识别出"有改键指向小键盘" ---
+        // NumLock 关闭时小键盘键在系统层面是 Home/方向键/End，魔兽的物品栏快捷键
+        // 就收不到，所以助手要靠这个标志决定是否自动打开 NumLock。
+        Check(Engine.MapsToNumpad, "detects that the scheme targets numpad keys");
+        Scheme noNum = new Scheme();
+        noNum.Maps.Add(NewMap((int)'S', (int)'H'));
+        cfg.Schemes.Add(noNum);
+        cfg.CurrentScheme = cfg.Schemes.Count - 1;
+        Engine.Rebuild();
+        Check(!Engine.MapsToNumpad, "a scheme without numpad targets does not ask for NumLock");
+        cfg.CurrentScheme = 0;
+        Engine.Rebuild();
+        Check(Engine.MapsToNumpad, "flag follows the active scheme");
+
         // --- 3) 滚轮方向解码：mouseData 高16位是有符号short ---
         Console.WriteLine("\n[3] wheel delta decoding");
         Check(DecodeWheel(0x00780000) > 0, "mouseData 0x00780000 (+120) decodes as wheel UP");

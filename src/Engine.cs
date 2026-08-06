@@ -158,6 +158,11 @@ namespace WshHelper
             _map = m;
             _itemSrc = item;
             _chatMap = cm;
+
+            bool numpad = false;
+            foreach (int dst in m.Values)
+                if (dst >= 0x60 && dst <= 0x69) { numpad = true; break; }
+            _mapsToNumpad = numpad;
         }
 
         // 查询当前生效的映射（诊断/测试用）
@@ -237,6 +242,33 @@ namespace WshHelper
             }
         }
 
+        // ---- 商店模式 ----
+        // 自动判断"当前选中的是不是商店"必须读游戏内存，本工具不做。
+        // 改成由玩家自己的操作来切换：按下"进入键"(比如滚轮)后挂起全部改键，
+        // 按下"恢复键"(默认F1，也就是重新选中英雄)后恢复。
+        static volatile bool _shopMode;
+
+        public static bool ShopMode { get { return _shopMode; } }
+
+        public static event Action ShopModeChanged;
+
+        static void SetShopMode(bool on)
+        {
+            if (_shopMode == on) return;
+            _shopMode = on;
+            Diag.Note(on ? "进入商店模式(改键已挂起)" : "退出商店模式(改键已恢复)");
+            Action h = ShopModeChanged;
+            if (h != null) { try { h(); } catch { } }
+        }
+
+        public static void ExitShopMode() { SetShopMode(false); }
+
+        // 改键当前是否被挂起（按住停用键 或 处于商店模式）
+        public static bool RemapSuspended
+        {
+            get { return SuspendHeld || _shopMode; }
+        }
+
         static void CountApm()
         {
             uint now = (uint)Environment.TickCount;
@@ -278,6 +310,39 @@ namespace WshHelper
         {
             _altResumeAt = (uint)Environment.TickCount + 350;
             ReleaseSynthAlt();
+        }
+
+        // ---- NumLock ----
+        // 魔兽的物品栏快捷键是小键盘 7/8/4/5/1/2。NumLock 关闭时，这些键在系统层面
+        // 就是 Home/↑/←/Clear/End/↓ —— 游戏收到的是方向键，物品栏改键自然全部落空。
+        // 所以只要有改键指向小键盘，就得保证 NumLock 是开的。
+        public static bool NumLockOn
+        {
+            get { return (Native.GetKeyState(0x90) & 1) != 0; }
+        }
+
+        static bool _mapsToNumpad;
+
+        public static bool MapsToNumpad { get { return _mapsToNumpad; } }
+
+        public static bool NumLockProblem
+        {
+            get { return _mapsToNumpad && !NumLockOn; }
+        }
+
+        public static void EnsureNumLock()
+        {
+            if (!NumLockProblem) return;
+            SendVk(0x90, true);
+            SendVk(0x90, false);
+            Diag.Note("NumLock 原为关闭，已自动打开(物品栏小键盘改键需要)");
+        }
+
+        public static void TickNumLock()
+        {
+            if (Cfg == null || !Cfg.AutoNumLock) return;
+            if (!War3Foreground()) return;
+            EnsureNumLock();
         }
 
         public static void TickBars()
@@ -322,9 +387,16 @@ namespace WshHelper
                 return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
             }
 
-            // 按住"临时停用"键时，所有改键和喊话热键原样放行。
+            // 商店模式的进入/退出键（在改键判断之前处理，这两个键本身照常放行）
+            if (down && Cfg.ShopModeEnabled)
+            {
+                if (Cfg.ShopExitKey != 0 && vk == Cfg.ShopExitKey) SetShopMode(false);
+                else if (Cfg.ShopEnterKey != 0 && vk == Cfg.ShopEnterKey) SetShopMode(true);
+            }
+
+            // 挂起时所有改键和喊话热键原样放行。
             // 用途：在商店里让 S 还是 S（改键会把 S 变成别的键，导致买不了树枝）。
-            if (SuspendHeld)
+            if (RemapSuspended)
                 return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
 
             if (down && _synthAlt) SuspendBars();
@@ -418,8 +490,18 @@ namespace WshHelper
             if (Native.ReadExtraInfo(lParam, Native.MouseExtraInfoOffset) == Native.InjectMagic)
                 return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
 
-            if (_sendingChat || Cfg == null || !War3Foreground() || SuspendHeld)
+            if (_sendingChat || Cfg == null || !War3Foreground())
                 return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
+
+            // 滚轮进入商店模式：先记下，滚轮自己的改键照常生效，之后的按键才挂起
+            bool wheelEvent = (msg == Native.WM_MOUSEWHEEL);
+            bool enterShopAfter = (wheelEvent && Cfg.ShopModeEnabled && Cfg.ShopEnterOnWheel);
+
+            if (RemapSuspended)
+            {
+                if (enterShopAfter) SetShopMode(true);
+                return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
+            }
 
             bool anyDown = (msg == Native.WM_LBUTTONDOWN || msg == Native.WM_RBUTTONDOWN ||
                             msg == Native.WM_MBUTTONDOWN || msg == Native.WM_XBUTTONDOWN);
@@ -478,10 +560,12 @@ namespace WshHelper
                         uint r = SendVk(dst, down);
                         Diag.Log(1, src, dst, down, true, true, r);
                     }
+                    if (enterShopAfter) SetShopMode(true);
                     return new IntPtr(1);
                 }
                 if (Diag.Enabled) Diag.Log(1, src, 0, down, true, false, 0);
             }
+            if (enterShopAfter) SetShopMode(true);
             return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
         }
 

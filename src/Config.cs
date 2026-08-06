@@ -89,6 +89,11 @@ namespace WshHelper
         public bool ItemKeySelectHeroFirst { get; set; }   // 物品键先按F1选英雄
         public int SuspendKey { get; set; }                // 按住它时临时停用改键(0=未设)
         public int InjectMode { get; set; }                // 0=虚拟键+扫描码(默认) 1=纯扫描码
+        public bool AutoNumLock { get; set; }              // 有小键盘改键时自动开启NumLock
+        public bool ShopModeEnabled { get; set; }          // 启用商店模式(挂起改键)
+        public bool ShopEnterOnWheel { get; set; }         // 滚轮上/下进入商店模式
+        public int ShopEnterKey { get; set; }              // 额外的进入键(0=未设)
+        public int ShopExitKey { get; set; }               // 恢复键(默认F1)
         public int ChatEnterDelay { get; set; }            // 回车后等待毫秒
         public int ChatCharDelay { get; set; }             // 每个字符间隔毫秒
         public int IconX { get; set; }
@@ -207,7 +212,7 @@ namespace WshHelper
             catch { }
         }
 
-        public const int CurrentConfigVersion = 2;
+        public const int CurrentConfigVersion = 3;
 
         public void SetDefaults()
         {
@@ -256,6 +261,11 @@ namespace WshHelper
             ItemKeySelectHeroFirst = false;
             ChatEnterDelay = 150;
             ChatCharDelay = 12;
+            AutoNumLock = true;
+            ShopModeEnabled = false;
+            ShopEnterOnWheel = false;
+            ShopEnterKey = 0;
+            ShopExitKey = 0x70;   // F1 = 重新选中英雄
         }
 
         static ChatItem Chat(int mods, int key, string text, string note)
@@ -358,6 +368,14 @@ namespace WshHelper
             if (ChatEnterDelay < 30 || ChatEnterDelay > 2000) ChatEnterDelay = 150;
             if (ChatCharDelay < 1 || ChatCharDelay > 200) ChatCharDelay = 12;
             if (InjectMode < 0 || InjectMode > 1) InjectMode = 0;
+
+            // ConfigVersion 3: 自动NumLock 与 商店模式
+            if (ConfigVersion < 3)
+            {
+                AutoNumLock = true;
+                if (ShopExitKey == 0) ShopExitKey = 0x70;
+                ConfigVersion = CurrentConfigVersion;
+            }
             if (LaunchModeValue < 0 || LaunchModeValue > 2) LaunchModeValue = (int)LaunchMode.BorderlessFullscreen;
             if (string.IsNullOrEmpty(VerSourceDir)) VerSourceDir = War3Version.DefaultSourceDir(War3Path);
         }
