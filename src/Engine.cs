@@ -540,11 +540,32 @@ namespace War3Helper
             return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
         }
 
-        // 发出改键结果。物品栏键可选先按F1选中英雄，这样在商店/小兵被选中时
+        // 连按同一个物品键时，第二次不能再插"选中英雄"。
+        // 原因：F1 是一条选择指令，会取消"指定目标"状态。魔兽里连按两次物品键
+        // 是对自己施法，中间插一次 F1 就把目标状态清掉了，双击永远生效不了。
+        // 而且第一次已经把英雄选中了，紧接着的第二次本来也不需要再选。
+        const int HeroSelectSkipWindowMs = 600;
+        static readonly Dictionary<int, uint> _lastItemPress = new Dictionary<int, uint>();
+
+        // 返回 true 表示这次物品键按下需要先补一个"选中英雄"
+        public static bool ConsumeItemPress(int src)
+        {
+            uint now = (uint)Environment.TickCount;
+            uint last;
+            bool recent = _lastItemPress.TryGetValue(src, out last)
+                          && (now - last) < HeroSelectSkipWindowMs;
+            _lastItemPress[src] = now;
+            return !recent;
+        }
+
+        public static void ResetItemPressTimes() { _lastItemPress.Clear(); }
+
+        // 发出改键结果。物品栏键可选先选中英雄，这样在商店/小兵被选中时
         // 也不会误买东西 —— 按下去永远作用在自己英雄身上。
         static void EmitMapped(int src, int dst, bool down, bool repeat)
         {
-            if (down && !repeat && Cfg.ItemKeySelectHeroFirst && _itemSrc.Contains(src))
+            if (down && !repeat && Cfg.ItemKeySelectHeroFirst && _itemSrc.Contains(src)
+                && ConsumeItemPress(src))
             {
                 int hero = Cfg.HeroSelectKey != 0 ? Cfg.HeroSelectKey : VK_F1;
                 SendVk(hero, true);

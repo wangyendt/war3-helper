@@ -238,6 +238,19 @@ static class EngineTests
         cfg.WheelMinIntervalMs = 300;
         Engine.ResetWheelThrottle();
 
+        // --- 3c) 物品键先选英雄：连按同一个键时不能重复插"选中英雄" ---
+        // 魔兽里连按两次物品键是对自己施法，中间插一次 F1(选择指令)会取消目标状态，
+        // 双击就永远生效不了。
+        Console.WriteLine("\n[3c] hero-select must not break double-tap");
+        Engine.ResetItemPressTimes();
+        Check(Engine.ConsumeItemPress((int)'1'), "first press asks for hero-select");
+        System.Threading.Thread.Sleep(60);
+        Check(!Engine.ConsumeItemPress((int)'1'), "quick second press of the SAME key skips it");
+        Check(Engine.ConsumeItemPress((int)'3'), "a different item key still gets its own hero-select");
+        System.Threading.Thread.Sleep(700);
+        Check(Engine.ConsumeItemPress((int)'1'), "after the double-tap window it asks again");
+        Engine.ResetItemPressTimes();
+
         // --- 4) 喊话热键表(组合键) ---
         Console.WriteLine("\n[4] chat hotkey table");
         string text;
