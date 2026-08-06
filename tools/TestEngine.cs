@@ -107,6 +107,65 @@ static class EngineTests
         cfg.ShopModeEnabled = false;
         Engine.Rebuild();
 
+        // --- 2d) 换一套完全不同的配置，规则应当同样自洽 ---
+        Console.WriteLine("\n[2d] a completely different config still behaves consistently");
+        AppConfig alt = new AppConfig();
+        alt.SetDefaults();
+        alt.FixUp();
+        Scheme a = alt.ActiveScheme;
+
+        // 用了 War3 自定义快捷键的人：物品栏根本不是小键盘，而是 QWERASDF 那种
+        a.ItemSlotDst = new int[] { (int)'Z', (int)'X', (int)'C', (int)'V', (int)'B', (int)'N' };
+        a.ItemKeys[0] = (int)'Q';
+        a.ItemKeys[1] = Native.VK_MBUTTON;
+        // 链式：A->B 且 B->C，两条互不影响(注入的键带魔数，不会再进钩子)
+        a.Maps.Add(NewMap((int)'A', (int)'B'));
+        a.Maps.Add(NewMap((int)'B', (int)'C'));
+        alt.Chats.Clear();
+        ChatItem cc = new ChatItem(); cc.Mods = 0; cc.Key = (int)'A'; cc.Text = "-ma";
+        alt.Chats.Add(cc);
+        Engine.Cfg = alt;
+        Engine.Rebuild();
+
+        Check(Engine.TryGetMapping((int)'Q', out dst) && dst == 'Z',
+              "item slot honours the scheme's own target key, not hardcoded numpad");
+        Check(Engine.TryGetMapping(Native.VK_MBUTTON, out dst) && dst == 'X',
+              "middle button drives item slot 2 with a custom target");
+        Check(Engine.IsItemSlotSource((int)'Q'), "custom item target still recognised as an item-slot key");
+        Check(!Engine.MapsToNumpad, "no numpad anywhere -> does not force NumLock on");
+
+        Check(Engine.TryGetMapping((int)'A', out dst) && dst == 'B', "chain: A maps to B");
+        Check(Engine.TryGetMapping((int)'B', out dst) && dst == 'C', "chain: B maps to C");
+        string ct;
+        Check(Engine.TryGetChat(0, (int)'A', out ct) && ct == "-ma",
+              "a chat hotkey on the same key as a remap is resolved first (documented precedence)");
+
+        // 把小键盘键当"源"用：NumLock 关闭时它根本不是小键盘键，同样要强制打开
+        Scheme np = new Scheme();
+        np.Maps.Add(NewMap(0x64, (int)'Q'));      // 小键盘4 -> Q
+        alt.Schemes.Add(np);
+        alt.CurrentScheme = alt.Schemes.Count - 1;
+        Engine.Rebuild();
+        Check(Engine.MapsToNumpad, "numpad used as a SOURCE also forces NumLock (was only checking targets)");
+
+        // 进入键和恢复键设成同一个键 -> 当成开关，不能变成永远进不去
+        alt.CurrentScheme = 0;
+        alt.ShopModeEnabled = true;
+        alt.ShopEnterOnWheel = false;
+        alt.ShopEnterKey = (int)'G';
+        alt.ShopExitKey = (int)'G';
+        Engine.Rebuild();
+        Engine.ExitShopMode();
+        Check(!Engine.IsSuspendedFor((int)'A'), "same enter/exit key: starts inactive");
+        Engine.EnterShopModeForTest();
+        Check(Engine.IsSuspendedFor((int)'A'), "same enter/exit key: toggles on");
+        Check(!Engine.IsSuspendedFor((int)'G'), "the toggle key itself is never suspended");
+        Engine.ExitShopMode();
+
+        Engine.Cfg = cfg;     // 还原给后面的用例
+        cfg.CurrentScheme = 0;
+        Engine.Rebuild();
+
         // --- 3) 滚轮方向解码：mouseData 高16位是有符号short ---
         Console.WriteLine("\n[3] wheel delta decoding");
         Check(DecodeWheel(0x00780000) > 0, "mouseData 0x00780000 (+120) decodes as wheel UP");

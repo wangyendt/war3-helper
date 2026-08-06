@@ -17,13 +17,22 @@ namespace WshHelper
     {
         public string Name { get; set; }
         public int[] ItemKeys { get; set; }          // 6个物品栏触发键, 0=未设置
+        public int[] ItemSlotDst { get; set; }       // 6个物品栏在游戏里的实际快捷键
         public bool ItemKeysKeepInShop { get; set; } // 商店模式下物品栏键仍然生效
         public List<KeyMapEntry> Maps { get; set; }
+
+        // 魔兽默认的物品栏快捷键：小键盘 7 8 4 5 1 2。
+        // 用了 War3 自定义快捷键(CustomKeys.txt)的话物品栏可能是别的键，所以做成可改的。
+        public static int[] DefaultItemSlotDst()
+        {
+            return new int[] { 0x67, 0x68, 0x64, 0x65, 0x61, 0x62 };
+        }
 
         public Scheme()
         {
             Name = "默认方案";
             ItemKeys = new int[6];
+            ItemSlotDst = DefaultItemSlotDst();
             Maps = new List<KeyMapEntry>();
         }
     }
@@ -97,6 +106,7 @@ namespace WshHelper
         public bool BlockWheelZoom { get; set; }           // 屏蔽滚轮的视角缩放
         public int ShopEnterKey { get; set; }              // 额外的进入键(0=未设)
         public int ShopExitKey { get; set; }               // 恢复键(默认F1)
+        public int HeroSelectKey { get; set; }             // 选中自己英雄的键(默认F1)
         public int ChatEnterDelay { get; set; }            // 回车后等待毫秒
         public int ChatCharDelay { get; set; }             // 每个字符间隔毫秒
         public int IconX { get; set; }
@@ -269,6 +279,7 @@ namespace WshHelper
             ShopEnterOnWheel = false;
             ShopEnterKey = 0;
             ShopExitKey = 0x70;   // F1 = 重新选中英雄
+            HeroSelectKey = 0x70;
             BlockWheelZoom = true;
         }
 
@@ -340,6 +351,16 @@ namespace WshHelper
                         for (int i = 0; i < Math.Min(6, s.ItemKeys.Length); i++) nk[i] = s.ItemKeys[i];
                     s.ItemKeys = nk;
                 }
+                if (s.ItemSlotDst == null || s.ItemSlotDst.Length != 6)
+                {
+                    int[] def = Scheme.DefaultItemSlotDst();
+                    if (s.ItemSlotDst != null)
+                        for (int i = 0; i < Math.Min(6, s.ItemSlotDst.Length); i++)
+                            if (s.ItemSlotDst[i] != 0) def[i] = s.ItemSlotDst[i];
+                    s.ItemSlotDst = def;
+                }
+                for (int i = 0; i < 6; i++)
+                    if (s.ItemSlotDst[i] == 0) s.ItemSlotDst[i] = Scheme.DefaultItemSlotDst()[i];
                 if (s.Maps == null) s.Maps = new List<KeyMapEntry>();
                 if (string.IsNullOrEmpty(s.Name)) s.Name = "未命名";
             }
@@ -384,6 +405,7 @@ namespace WshHelper
             {
                 BlockWheelZoom = true;
             }
+            if (HeroSelectKey == 0) HeroSelectKey = 0x70;
             if (ConfigVersion < CurrentConfigVersion) ConfigVersion = CurrentConfigVersion;
             if (LaunchModeValue < 0 || LaunchModeValue > 2) LaunchModeValue = (int)LaunchMode.BorderlessFullscreen;
             if (string.IsNullOrEmpty(VerSourceDir)) VerSourceDir = War3Version.DefaultSourceDir(War3Path);

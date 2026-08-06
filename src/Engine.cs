@@ -18,7 +18,11 @@ namespace WshHelper
     public static class Engine
     {
         // 物品栏1~6对应小键盘 7 8 4 5 1 2
+        // 魔兽默认的物品栏快捷键。实际用哪几个键由 Scheme.ItemSlotDst 决定，
+        // 这里只是默认值 —— 用了 War3 自定义快捷键的人物品栏可能不是小键盘。
         public static readonly int[] ItemSlotVk = new int[] { 0x67, 0x68, 0x64, 0x65, 0x61, 0x62 };
+
+        public static bool IsNumpadVk(int vk) { return vk >= 0x60 && vk <= 0x69; }
 
         public const int VK_ALT = 0x12;
         public const int VK_F1 = 0x70;
@@ -143,10 +147,11 @@ namespace WshHelper
             if (Cfg != null)
             {
                 Scheme s = Cfg.ActiveScheme;
+                int[] slotDst = s.ItemSlotDst;      // 方案自己的物品栏目标键，不再写死小键盘
                 for (int i = 0; i < 6; i++)
                     if (s.ItemKeys[i] != 0)
                     {
-                        m[s.ItemKeys[i]] = ItemSlotVk[i];
+                        m[s.ItemKeys[i]] = slotDst[i];
                         item.Add(s.ItemKeys[i]);
                         if (s.ItemKeysKeepInShop) keep.Add(s.ItemKeys[i]);
                     }
@@ -154,7 +159,7 @@ namespace WshHelper
                     if (e.Src != 0 && e.Dst != 0 && e.Src != e.Dst)
                     {
                         m[e.Src] = e.Dst;
-                        if (Array.IndexOf(ItemSlotVk, e.Dst) >= 0) item.Add(e.Src);
+                        if (Array.IndexOf(slotDst, e.Dst) >= 0) item.Add(e.Src);
                         else item.Remove(e.Src);
                         if (e.KeepInShop) keep.Add(e.Src); else keep.Remove(e.Src);
                     }
@@ -168,9 +173,14 @@ namespace WshHelper
             _shopKeep = keep;
             _chatMap = cm;
 
+            // 源键和目标键都要看：NumLock 关闭时小键盘键在系统层面是方向键/Home/End，
+            // 所以既发不出去(当目标)，也认不出来(当源)。
             bool numpad = false;
-            foreach (int dst in m.Values)
-                if (dst >= 0x60 && dst <= 0x69) { numpad = true; break; }
+            foreach (KeyValuePair<int, int> kv in m)
+                if (IsNumpadVk(kv.Key) || IsNumpadVk(kv.Value)) { numpad = true; break; }
+            if (!numpad && Cfg != null && Cfg.Chats != null)
+                foreach (ChatItem c in Cfg.Chats)
+                    if (c.Key != 0 && IsNumpadVk(c.Key)) { numpad = true; break; }
             _mapsToNumpad = numpad;
         }
 
@@ -417,8 +427,12 @@ namespace WshHelper
             // 商店模式的进入/退出键（在改键判断之前处理，这两个键本身照常放行）
             if (down && Cfg.ShopModeEnabled)
             {
-                if (Cfg.ShopExitKey != 0 && vk == Cfg.ShopExitKey) SetShopMode(false);
-                else if (Cfg.ShopEnterKey != 0 && vk == Cfg.ShopEnterKey) SetShopMode(true);
+                bool isEnter = (Cfg.ShopEnterKey != 0 && vk == Cfg.ShopEnterKey);
+                bool isExit = (Cfg.ShopExitKey != 0 && vk == Cfg.ShopExitKey);
+                // 两个键设成同一个时当成开关用，否则退出优先会导致永远进不去
+                if (isEnter && isExit) SetShopMode(!_shopMode);
+                else if (isExit) SetShopMode(false);
+                else if (isEnter) SetShopMode(true);
             }
 
             // 按住"临时停用"键时连喊话热键一起放行
@@ -496,8 +510,9 @@ namespace WshHelper
         {
             if (down && !repeat && Cfg.ItemKeySelectHeroFirst && _itemSrc.Contains(src))
             {
-                SendVk(VK_F1, true);
-                SendVk(VK_F1, false);
+                int hero = Cfg.HeroSelectKey != 0 ? Cfg.HeroSelectKey : VK_F1;
+                SendVk(hero, true);
+                SendVk(hero, false);
             }
             uint r = SendVk(dst, down);
             Diag.Log(0, src, dst, down, true, true, r);

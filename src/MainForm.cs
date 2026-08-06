@@ -391,6 +391,7 @@ namespace WshHelper
             tp.Controls.Add(chkWin);
 
             GroupBox gItems = new GroupBox();
+            gItemsBox = gItems;
             gItems.Text = "物品栏快捷键 (物品1~6 = 小键盘 7 8 4 5 1 2)";
             gItems.Bounds = new Rectangle(12, 40, 330, 130);
             tp.Controls.Add(gItems);
@@ -414,9 +415,15 @@ namespace WshHelper
                 gItems.Controls.Add(cb);
             }
 
+            Button bSlotAdv = new Button();
+            bSlotAdv.Text = "目标键...";
+            bSlotAdv.Bounds = new Rectangle(240, 172, 100, 26);
+            bSlotAdv.Click += delegate { ShowItemSlotDialog(); };
+            tp.Controls.Add(bSlotAdv);
+
             chkHeroFirst = new CheckBox();
-            chkHeroFirst.Text = "物品键先选中英雄 (F1)";
-            chkHeroFirst.Bounds = new Rectangle(14, 174, 330, 22);
+            chkHeroFirst.Text = "物品键先选中英雄";
+            chkHeroFirst.Bounds = new Rectangle(14, 174, 220, 22);
             chkHeroFirst.CheckedChanged += delegate
             {
                 if (loading) return;
@@ -890,6 +897,114 @@ namespace WshHelper
             hint.ForeColor = Color.DimGray;
             tp.Controls.Add(hint);
         }
+
+        // 物品栏"目标键"= 这6个格子在游戏里真正的快捷键。默认是魔兽自带的小键盘 7 8 4 5 1 2，
+        // 用了 War3 自定义快捷键(CustomKeys.txt)的话就不是小键盘了，所以做成可改。
+        void ShowItemSlotDialog()
+        {
+            Form f = new Form();
+            f.Text = "物品栏目标键 / 英雄选择键";
+            f.FormBorderStyle = FormBorderStyle.FixedDialog;
+            f.ClientSize = new Size(430, 300);
+            f.StartPosition = FormStartPosition.CenterParent;
+            f.MinimizeBox = f.MaximizeBox = false;
+            f.Font = new Font("Microsoft YaHei UI", 9F);
+            f.Icon = IconGen.AppIcon();
+
+            Label top = new Label();
+            top.Text = "这6个格子在游戏里真正的快捷键。魔兽默认是小键盘 7 8 4 5 1 2，\r\n" +
+                       "如果你用了 War3 自定义快捷键(CustomKeys.txt)，改成你实际用的键。";
+            top.Bounds = new Rectangle(12, 10, 406, 40);
+            top.ForeColor = Color.DimGray;
+            f.Controls.Add(top);
+
+            CaptureBox[] caps = new CaptureBox[6];
+            int[] work = (int[])cfg.ActiveScheme.ItemSlotDst.Clone();
+            for (int i = 0; i < 6; i++)
+            {
+                int col = i / 3, row = i % 3;
+                Label l = new Label();
+                l.Text = "物品" + (i + 1);
+                l.Bounds = new Rectangle(20 + col * 200, 62 + row * 32, 48, 20);
+                f.Controls.Add(l);
+                CaptureBox cb = new CaptureBox();
+                cb.Bounds = new Rectangle(70 + col * 200, 58 + row * 32, 110, 24);
+                cb.Vk = work[i];
+                int idx = i;
+                cb.VkChanged += delegate { work[idx] = cb.Vk; };
+                caps[i] = cb;
+                f.Controls.Add(cb);
+            }
+
+            Label lh = new Label();
+            lh.Text = "选中自己英雄的键:";
+            lh.Bounds = new Rectangle(20, 172, 120, 20);
+            f.Controls.Add(lh);
+            CaptureBox capHero = new CaptureBox();
+            capHero.Bounds = new Rectangle(142, 168, 110, 24);
+            capHero.Vk = cfg.HeroSelectKey;
+            f.Controls.Add(capHero);
+            Label lh2 = new Label();
+            lh2.Text = "(默认F1，供\"物品键先选中英雄\"用)";
+            lh2.Bounds = new Rectangle(20, 196, 400, 20);
+            lh2.ForeColor = Color.DimGray;
+            f.Controls.Add(lh2);
+
+            Label lck = new Label();
+            lck.Bounds = new Rectangle(20, 220, 400, 20);
+            lck.ForeColor = Color.FromArgb(180, 60, 0);
+            try
+            {
+                string[] ck = Directory.GetFiles(cfg.War3Path, "CustomKeys*.txt", SearchOption.AllDirectories);
+                lck.Text = ck.Length > 0
+                    ? "检测到 CustomKeys 文件，物品栏快捷键可能不是小键盘，请核对上面的设置"
+                    : "未检测到 CustomKeys 文件，用魔兽默认的小键盘即可";
+            }
+            catch { lck.Text = ""; }
+            f.Controls.Add(lck);
+
+            Button bDef = new Button();
+            bDef.Text = "恢复默认(小键盘)";
+            bDef.Bounds = new Rectangle(20, 252, 140, 30);
+            bDef.Click += delegate
+            {
+                int[] d = Scheme.DefaultItemSlotDst();
+                for (int i = 0; i < 6; i++) { work[i] = d[i]; caps[i].Vk = d[i]; }
+                capHero.Vk = 0x70;
+            };
+            f.Controls.Add(bDef);
+
+            Button ok = new Button(); ok.Text = "确定"; ok.DialogResult = DialogResult.OK;
+            ok.Bounds = new Rectangle(250, 252, 80, 30);
+            f.Controls.Add(ok);
+            Button cancel = new Button(); cancel.Text = "取消"; cancel.DialogResult = DialogResult.Cancel;
+            cancel.Bounds = new Rectangle(338, 252, 80, 30);
+            f.Controls.Add(cancel);
+            f.AcceptButton = ok;
+            f.CancelButton = cancel;
+            Util.DpiScale(f);
+
+            if (f.ShowDialog(this) != DialogResult.OK) return;
+            for (int i = 0; i < 6; i++)
+                if (work[i] != 0) cfg.ActiveScheme.ItemSlotDst[i] = work[i];
+            if (capHero.Vk != 0) cfg.HeroSelectKey = capHero.Vk;
+            SaveRebuild();
+            UpdateItemSlotLabel();
+        }
+
+        void UpdateItemSlotLabel()
+        {
+            if (gItemsBox == null) return;
+            int[] d = cfg.ActiveScheme.ItemSlotDst;
+            bool isDefault = true;
+            int[] def = Scheme.DefaultItemSlotDst();
+            for (int i = 0; i < 6; i++) if (d[i] != def[i]) { isDefault = false; break; }
+            gItemsBox.Text = isDefault
+                ? "物品栏快捷键 (物品1~6 = 小键盘 7 8 4 5 1 2)"
+                : "物品栏快捷键 (目标键已自定义)";
+        }
+
+        GroupBox gItemsBox;
 
         int CurrentChatMods()
         {
@@ -1741,6 +1856,7 @@ namespace WshHelper
             for (int i = 0; i < 6; i++) capItems[i].Vk = cfg.ActiveScheme.ItemKeys[i];
             if (chkItemKeepShop != null) chkItemKeepShop.Checked = cfg.ActiveScheme.ItemKeysKeepInShop;
             loading = old;
+            UpdateItemSlotLabel();
             ReloadMaps();
         }
 
