@@ -1,0 +1,84 @@
+War3助手 常用命令
+说明：所有命令均为单行，可直接复制。除注明外，默认工作目录为仓库根目录
+      D:\work\code\game\war3-helper
+
+
+# ===== 构建 =====
+# 只需系统自带的 .NET Framework 4.x，不用装任何 SDK。会先生成图标再编译主程序。
+powershell -ExecutionPolicy Bypass -File .\build.ps1
+
+# 构建产物（不入库，可随时重新生成）
+# bin\War3Helper.exe
+
+
+# ===== 测试 =====
+# 版本切换沙箱测试 + 引擎测试，共 100 项断言。不需要开游戏，锁屏也能跑。退出码 0 表示全过。
+powershell -ExecutionPolicy Bypass -File .\build-test.ps1
+
+# 只看结果，不看逐条断言
+powershell -ExecutionPolicy Bypass -File .\build-test.ps1 > $null 2>&1; echo "exit=$LASTEXITCODE"
+
+
+# ===== 打包发布 =====
+# 依次执行：构建 -> 跑全部测试(不过则拒绝打包) -> 生成 zip -> 校验中文文件名 -> 打印 SHA256
+powershell -ExecutionPolicy Bypass -File .\make-release.ps1 -Version 1.0.0
+
+# 产物：dist\War3Helper-vX.Y.Z.zip（内含 War3Helper.exe 和 使用说明.txt）
+
+
+# ===== 打 tag 并推送 =====
+# annotated tag，说明写在 -m 里
+git tag -a v1.0.0 -m "War3助手 v1.0.0"
+
+# 推送代码和 tag（两条要分开推）
+git push origin main
+
+git push origin v1.0.0
+
+# 查看本地和远程的 tag
+git tag -n99
+
+git ls-remote --tags origin
+
+
+# ===== 发布 GitHub Release =====
+# 前置：gh auth login（走浏览器授权，只需一次）
+gh auth status
+
+# 用已存在的 tag 创建 release 并上传 zip
+gh release create v1.0.0 ".\dist\War3Helper-v1.0.0.zip" --repo wangyendt/war3-helper --title "War3助手 v1.0.0" --notes-file ".\dist\release-body.md"
+
+# 没提前打 tag 时，让 gh 基于 main 自己建 tag
+gh release create v1.0.0 ".\dist\War3Helper-v1.0.0.zip" --repo wangyendt/war3-helper --target main --title "War3助手 v1.0.0" --notes-file ".\dist\release-body.md"
+
+# 查看已发布的 release
+gh release list --repo wangyendt/war3-helper
+
+# 查看某个 release 的详情和附件
+gh release view v1.0.0 --repo wangyendt/war3-helper --json tagName,name,isDraft,publishedAt,url,assets
+
+# 给已有 release 补传或替换附件
+gh release upload v1.0.0 ".\dist\War3Helper-v1.0.0.zip" --repo wangyendt/war3-helper --clobber
+
+# 删除 release（tag 会保留，需要时再单独删 tag）
+gh release delete v1.0.0 --repo wangyendt/war3-helper --yes
+
+
+# ===== 发布后验证 =====
+# 注意：本节两条是 PowerShell 语句，直接粘进 PowerShell 窗口执行，不要套 powershell -Command
+# 从 GitHub 把包下回来核对 SHA256，确认上传没有损坏
+Invoke-WebRequest -Uri 'https://github.com/wangyendt/war3-helper/releases/download/v1.0.0/War3Helper-v1.0.0.zip' -OutFile "$env:TEMP\w3h.zip" -UseBasicParsing; (Get-FileHash "$env:TEMP\w3h.zip" -Algorithm SHA256).Hash
+
+# 本地包的 SHA256，用来和上面的结果比对
+(Get-FileHash '.\dist\War3Helper-v1.0.0.zip' -Algorithm SHA256).Hash
+
+
+# ===== 诊断 =====
+# 打印程序实际解析到的配置路径和读到的内容。排查“设置怎么变回默认了”时用。
+powershell -ExecutionPolicy Bypass -File .\build-dump.ps1
+
+# 配置文件位置（改键方案存在这里，删程序也不会丢）
+# %APPDATA%\War3Helper\config.json
+
+# 诊断日志位置（在改键页勾上“记录诊断日志”后产生）
+# %APPDATA%\War3Helper\diag.log
