@@ -3,7 +3,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Windows.Forms;
 
-namespace WshHelper
+namespace War3Helper
 {
     // 主界面需要向局内菜单暴露的操作
     public interface IHelperActions

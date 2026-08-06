@@ -4,7 +4,7 @@ using System.IO;
 using System.Text;
 using System.Web.Script.Serialization;
 
-namespace WshHelper
+namespace War3Helper
 {
     public class KeyMapEntry
     {
@@ -147,10 +147,13 @@ namespace WshHelper
             set { LaunchModeValue = (int)value; }
         }
 
-        // 配置默认存到 %APPDATA%\WshHelper\config.json —— 这样删掉 bin\、重新编译、
+        // 配置默认存到 %APPDATA%\War3Helper\config.json —— 这样删掉 bin\、重新编译、
         // 重新 clone 仓库都不会丢改键方案。
-        // 如果 exe 旁边已经有 config.json(旧版本或绿色版用法)，就继续用那个。
+        // 如果 exe 旁边有 portable.txt，配置就跟着程序走(绿色版)。
         static string _configPath;
+
+        const string AppDataDirName = "War3Helper";
+        const string LegacyAppDataDirName = "WshHelper";   // 改名前的目录
 
         static string ExeDir { get { return AppDomain.CurrentDomain.BaseDirectory; } }
 
@@ -168,13 +171,21 @@ namespace WshHelper
                     return _configPath;
                 }
 
-                string dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WshHelper");
+                string roaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                string dir = Path.Combine(roaming, AppDataDirName);
                 string appData = Path.Combine(dir, "config.json");
                 try
                 {
                     Directory.CreateDirectory(dir);
-                    // 旧版把配置放在 exe 目录，首次运行时搬过来，避免重新编译/删bin丢方案
+
+                    // 程序改名前配置在 %APPDATA%\WshHelper，搬过来，别让老用户丢方案
+                    if (!File.Exists(appData))
+                    {
+                        string legacy = Path.Combine(Path.Combine(roaming, LegacyAppDataDirName), "config.json");
+                        if (File.Exists(legacy)) File.Copy(legacy, appData, false);
+                    }
+
+                    // 更早的版本把配置放在 exe 目录，同样搬过来
                     if (!File.Exists(appData) && File.Exists(portable))
                     {
                         File.Copy(portable, appData, false);

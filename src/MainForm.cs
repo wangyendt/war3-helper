@@ -5,7 +5,7 @@ using System.IO;
 using System.Threading;
 using System.Windows.Forms;
 
-namespace WshHelper
+namespace War3Helper
 {
     // 按键采集框：点击后按任意键/鼠标侧键采集，双击清除
     public class CaptureBox : TextBox
@@ -148,7 +148,7 @@ namespace WshHelper
             cfg = AppConfig.Load();
             Engine.Cfg = cfg;
 
-            Text = "WSH魔兽助手 (U9WSH复刻增强版)";
+            Text = "War3助手 — 魔兽争霸3 改键 / 喊话 / 版本切换";
             Font = new Font("Microsoft YaHei UI", 9F);
             ClientSize = new Size(720, 640);
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -192,7 +192,7 @@ namespace WshHelper
                 BeginInvoke((Action)delegate
                 {
                     lblReplayStatus.Text = string.Format("[{0:HH:mm}] {1}", DateTime.Now, s);
-                    if (tray != null) tray.ShowBalloonTip(2000, "WSH助手", s, ToolTipIcon.Info);
+                    if (tray != null) tray.ShowBalloonTip(2000, "War3助手", s, ToolTipIcon.Info);
                     ReloadReplays();
                 });
             };
@@ -1610,7 +1610,7 @@ namespace WshHelper
             t.Dock = DockStyle.Fill;
             t.Font = new Font("Microsoft YaHei UI", 9.5F);
             t.Text =
-"WSH魔兽助手 — U9WSH(魔兽超级助手)复刻增强版\r\n" +
+"War3助手 — 魔兽争霸3 全能辅助 (U9WSH 复刻增强版)\r\n" +
 "================================================\r\n\r\n" +
 "【全局热键】(魔兽窗口前台时生效)\r\n" +
 "  Ctrl+F2   改键开/关\r\n" +
@@ -1686,7 +1686,7 @@ namespace WshHelper
 "  · 关闭窗口 = 最小化到托盘继续工作，托盘右键→退出 才是真正退出。\r\n" +
 "  · 如按键映射后游戏无反应，请把本助手也以管理员身份运行\r\n" +
 "    (魔兽以管理员运行时，普通权限的助手无法向它发送按键)。\r\n" +
-"  · 配置(含改键方案)保存在 %APPDATA%\\WshHelper\\config.json，\r\n" +
+"  · 配置(含改键方案)保存在 %APPDATA%\\War3Helper\\config.json，\r\n" +
 "    重新编译助手、删除bin目录都不会丢。喊话页有\"配置文件位置\"按钮可直接打开。\r\n" +
 "    想让配置跟着程序走(绿色版)，在exe旁边放一个空的 portable.txt 即可。\r\n" +
 "  · Windows 会把耗时过长的低层钩子静默摘掉(默认300ms超时)，助手带看门狗，\r\n" +
@@ -2011,7 +2011,7 @@ namespace WshHelper
         {
             tray = new NotifyIcon();
             tray.Icon = IconGen.TrayIcon();
-            tray.Text = "WSH魔兽助手";
+            tray.Text = "War3助手";
             tray.Visible = true;
             ContextMenuStrip menu = new ContextMenuStrip();
             menu.Font = new Font("Microsoft YaHei UI", 9F);
@@ -2042,7 +2042,7 @@ namespace WshHelper
             {
                 e.Cancel = true;
                 Hide();
-                tray.ShowBalloonTip(1500, "WSH助手", "已最小化到托盘，改键继续生效。右键托盘图标可退出。", ToolTipIcon.Info);
+                tray.ShowBalloonTip(1500, "War3助手", "已最小化到托盘，改键继续生效。右键托盘图标可退出。", ToolTipIcon.Info);
                 return;
             }
             cfg.Save();

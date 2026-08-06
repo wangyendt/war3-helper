@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
-namespace WshHelper
+namespace War3Helper
 {
     // 键盘/鼠标底层钩子 + 改键引擎 + 喊话 + APM统计 + 血条常显
     //

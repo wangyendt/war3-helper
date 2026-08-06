@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using WshHelper;
+using War3Helper;
 
 // 引擎测试：改键表构建(含鼠标侧键/滚轮)、钩子结构体偏移、喊话逐字输入路径。
 // 这些都不需要前台窗口，可以在锁屏/无游戏时跑。

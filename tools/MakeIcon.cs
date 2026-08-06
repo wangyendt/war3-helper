@@ -9,7 +9,7 @@ static class MakeIcon
         string outPath = args.Length > 0 ? args[0] : "app.ico";
         try
         {
-            File.WriteAllBytes(outPath, WshHelper.IconGen.BuildIco());
+            File.WriteAllBytes(outPath, War3Helper.IconGen.BuildIco());
             Console.WriteLine("icon written: " + outPath);
             return 0;
         }

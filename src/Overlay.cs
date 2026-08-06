@@ -3,7 +3,7 @@ using System.Drawing;
 using System.Threading;
 using System.Windows.Forms;
 
-namespace WshHelper
+namespace War3Helper
 {
     // 置顶穿透悬浮窗：APM显示 + 计时提醒 + 临时消息
     public class OverlayForm : Form

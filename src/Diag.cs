@@ -3,7 +3,7 @@ using System.IO;
 using System.Text;
 using System.Threading;
 
-namespace WshHelper
+namespace War3Helper
 {
     // 诊断日志：钩子里只往环形缓冲区写一条定长记录(无分配、无IO)，
     // 由后台线程刷到文件。低层钩子回调超过 LowLevelHooksTimeout 会被系统摘掉，
@@ -67,7 +67,7 @@ namespace WshHelper
         static string BuildHeader()
         {
             StringBuilder sb = new StringBuilder();
-            sb.AppendLine("WSH魔兽助手 诊断日志  " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            sb.AppendLine("War3助手 诊断日志  " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
             sb.AppendLine("列: 时间 | 类型 | 按下的键 -> 发出的键 | 魔兽是否前台 | 是否改键 | SendInput返回值");
             sb.AppendLine("SendInput 返回 0 表示注入被系统拒绝(通常是权限问题)。");
             sb.AppendLine(new string('-', 78));

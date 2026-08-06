@@ -6,7 +6,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Text;
 
-namespace WshHelper
+namespace War3Helper
 {
     public class VersionPackage
     {
@@ -355,7 +355,7 @@ namespace WshHelper
                     SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
 
                 HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
-                req.UserAgent = "WshHelper";
+                req.UserAgent = "War3Helper";
                 req.Timeout = 30000;
                 using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
                 using (Stream s = resp.GetResponseStream())

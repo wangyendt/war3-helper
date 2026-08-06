@@ -2,7 +2,7 @@ using System;
 using System.Threading;
 using System.Windows.Forms;
 
-namespace WshHelper
+namespace War3Helper
 {
     public static class Util
     {
@@ -23,11 +23,11 @@ namespace WshHelper
         static void Main()
         {
             bool createdNew;
-            using (Mutex mtx = new Mutex(true, "WshHelper_SingleInstance", out createdNew))
+            using (Mutex mtx = new Mutex(true, "War3Helper_SingleInstance", out createdNew))
             {
                 if (!createdNew)
                 {
-                    MessageBox.Show("WSH魔兽助手已在运行（请查看系统托盘）。", "提示");
+                    MessageBox.Show("War3助手已在运行（请查看系统托盘）。", "提示");
                     return;
                 }
                 try { Native.SetProcessDPIAware(); }

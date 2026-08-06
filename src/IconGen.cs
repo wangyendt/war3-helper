@@ -5,7 +5,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 
-namespace WshHelper
+namespace War3Helper
 {
     // 程序图标：深色盾牌底 + 金色"W"符文，纯代码绘制，多尺寸打包为.ico
     public static class IconGen

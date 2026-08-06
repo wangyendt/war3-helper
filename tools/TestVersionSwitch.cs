@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
-using WshHelper;
+using War3Helper;
 
 // 沙箱测试：在临时目录里模拟一个魔兽安装 + 两个版本包，验证切换/切回不会丢文件。
 // 用 build-test.ps1 编译运行，不会碰真实游戏目录。

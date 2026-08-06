@@ -6,7 +6,7 @@ using System.Text;
 using System.Threading;
 using Microsoft.Win32;
 
-namespace WshHelper
+namespace War3Helper
 {
     public class ReplayInfo
     {
