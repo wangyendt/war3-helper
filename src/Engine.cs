@@ -24,6 +24,38 @@ namespace WshHelper
 
         public static bool IsNumpadVk(int vk) { return vk >= 0x60 && vk <= 0x69; }
 
+        // ---- 滚轮节流 ----
+        // 不少鼠标一格物理刻度会连着发好几条 WM_MOUSEWHEEL(实测同方向间隔只有 78~94ms)，
+        // 结果一次滚动触发了两次改键。按方向各自记时间，间隔不够就丢弃。
+        // 上下分开计时，这样"上滚紧接着下滚"这种有意的方向切换不会被误伤。
+        static uint _lastWheelUp = uint.MaxValue - 100000;
+        static uint _lastWheelDown = uint.MaxValue - 100000;
+
+        // 返回 true 表示这一次滚轮可以放行；false 表示间隔太近，应当丢弃
+        public static bool TryConsumeWheel(int src)
+        {
+            int min = (Cfg != null) ? Cfg.WheelMinIntervalMs : 0;
+            if (min <= 0) return true;
+            uint now = (uint)Environment.TickCount;
+            if (src == Native.VK_WHEELUP)
+            {
+                if (now - _lastWheelUp < (uint)min) return false;
+                _lastWheelUp = now;
+            }
+            else
+            {
+                if (now - _lastWheelDown < (uint)min) return false;
+                _lastWheelDown = now;
+            }
+            return true;
+        }
+
+        public static void ResetWheelThrottle()
+        {
+            _lastWheelUp = uint.MaxValue - 100000;
+            _lastWheelDown = uint.MaxValue - 100000;
+        }
+
         public const int VK_ALT = 0x12;
         public const int VK_F1 = 0x70;
 
@@ -601,6 +633,14 @@ namespace WshHelper
                 {
                     if (wheel)
                     {
+                        if (!TryConsumeWheel(src))
+                        {
+                            // 间隔太近，判定为同一格刻度的重复事件：不发按键，
+                            // 但仍然吞掉，免得这一条漏到游戏里变成视角缩放
+                            if (Diag.Enabled) Diag.Note("滚轮间隔过短，已忽略重复的一次");
+                            if (enterShopAfter) SetShopMode(true);
+                            return new IntPtr(1);
+                        }
                         uint r = SendVk(dst, true);
                         SendVk(dst, false);
                         Diag.Log(1, src, dst, true, true, true, r);

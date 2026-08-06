@@ -111,7 +111,7 @@ namespace WshHelper
         CaptureBox capChatKey;
         CheckBox chkMCtrl, chkMAlt, chkMShift;
         TextBox txtChat, txtChatNote;
-        NumericUpDown numEnterDelay, numCharDelay;
+        NumericUpDown numEnterDelay, numCharDelay, numWheelGap;
         // 窗口页
         TextBox txtPath;
         ComboBox cmbRes, cmbLaunch;
@@ -680,6 +680,33 @@ namespace WshHelper
                 SaveRebuild();
             };
             gMaps.Controls.Add(bDelMap);
+
+            Label lwi = new Label();
+            lwi.Text = "滚轮最小间隔:";
+            lwi.Bounds = new Rectangle(14, 518, 90, 20);
+            tp.Controls.Add(lwi);
+            numWheelGap = new NumericUpDown();
+            numWheelGap.Minimum = 0; numWheelGap.Maximum = 2000; numWheelGap.Increment = 50;
+            numWheelGap.Bounds = new Rectangle(106, 514, 70, 24);
+            numWheelGap.ValueChanged += delegate
+            {
+                if (loading) return;
+                cfg.WheelMinIntervalMs = (int)numWheelGap.Value;
+                Engine.ResetWheelThrottle();
+                cfg.Save();
+            };
+            tp.Controls.Add(numWheelGap);
+            Label lwi2 = new Label();
+            lwi2.Text = "毫秒 (0=不限制)";
+            lwi2.Bounds = new Rectangle(182, 518, 110, 20);
+            tp.Controls.Add(lwi2);
+            Label lwi3 = new Label();
+            lwi3.Text = "有些鼠标一格刻度会连发好几次滚轮事件，\r\n" +
+                        "导致一次滚动触发两次改键。上滚下滚各自计时，\r\n" +
+                        "所以上滚紧接着下滚不会被拦。";
+            lwi3.Bounds = new Rectangle(14, 540, 336, 60);
+            lwi3.ForeColor = Color.DimGray;
+            tp.Controls.Add(lwi3);
 
             GroupBox gDiag = new GroupBox();
             gDiag.Text = "改键不生效时用这里排查";
@@ -1852,6 +1879,7 @@ namespace WshHelper
             capShopEnter.Vk = cfg.ShopEnterKey;
             capShopExit.Vk = cfg.ShopExitKey;
             chkBlockWheel.Checked = cfg.BlockWheelZoom;
+            numWheelGap.Value = Math.Max(0, Math.Min(2000, cfg.WheelMinIntervalMs));
             chkItemKeepShop.Checked = cfg.ActiveScheme.ItemKeysKeepInShop;
             cmbInject.SelectedIndex = cfg.InjectMode;
             chkDiag.Checked = Diag.Enabled;

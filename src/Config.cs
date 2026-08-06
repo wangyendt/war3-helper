@@ -115,6 +115,7 @@ namespace WshHelper
         public bool ShopModeEnabled { get; set; }          // 启用商店模式(挂起改键)
         public bool ShopEnterOnWheel { get; set; }         // 滚轮上/下进入商店模式
         public bool BlockWheelZoom { get; set; }           // 屏蔽滚轮的视角缩放
+        public int WheelMinIntervalMs { get; set; }        // 同方向滚轮的最小间隔(0=不限制)
         public int ShopEnterKey { get; set; }              // 额外的进入键(0=未设)
         public int ShopExitKey { get; set; }               // 恢复键(默认F1)
         public int HeroSelectKey { get; set; }             // 选中自己英雄的键(默认F1)
@@ -237,7 +238,7 @@ namespace WshHelper
             catch { }
         }
 
-        public const int CurrentConfigVersion = 5;
+        public const int CurrentConfigVersion = 6;
 
         public void SetDefaults()
         {
@@ -294,6 +295,7 @@ namespace WshHelper
             HeroSelectKey = 0x70;
             BlockWheelZoom = true;
             BuiltinStopAsHold = true;
+            WheelMinIntervalMs = 300;
         }
 
         static ChatItem Chat(int mods, int key, string text, string note)
@@ -419,6 +421,10 @@ namespace WshHelper
                 BlockWheelZoom = true;
             }
             if (HeroSelectKey == 0) HeroSelectKey = 0x70;
+            // ConfigVersion 6: 滚轮最小间隔。0 是"不限制"的合法取值，所以不能靠范围校验补默认值，
+            // 只能在这里给老配置补上。
+            if (ConfigVersion < 6) WheelMinIntervalMs = 300;
+            if (WheelMinIntervalMs < 0 || WheelMinIntervalMs > 2000) WheelMinIntervalMs = 300;
 
             // ConfigVersion 5:
             //  a) 物品栏目标键顺序修正 —— 之前是横向的 7 8 4 5 1 2，而界面上
@@ -427,6 +433,7 @@ namespace WshHelper
             if (ConfigVersion < 5)
             {
                 BuiltinStopAsHold = true;
+                WheelMinIntervalMs = 300;
                 int[] legacy = Scheme.LegacyRowMajorItemSlotDst();
                 foreach (Scheme s in Schemes)
                 {

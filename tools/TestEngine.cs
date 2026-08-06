@@ -218,6 +218,26 @@ static class EngineTests
         Check(DecodeXButton(0x00010000) == 1, "mouseData 0x00010000 decodes as XBUTTON1");
         Check(DecodeXButton(0x00020000) == 2, "mouseData 0x00020000 decodes as XBUTTON2");
 
+        // --- 3b) 滚轮节流：一格刻度连发多次时只放行第一次 ---
+        Console.WriteLine("\n[3b] wheel throttle");
+        cfg.WheelMinIntervalMs = 200;
+        Engine.Cfg = cfg;
+        Engine.ResetWheelThrottle();
+        Check(Engine.TryConsumeWheel(Native.VK_WHEELUP), "first wheel-up passes");
+        System.Threading.Thread.Sleep(80);    // 实测日志里重复事件的间隔就是 78~94ms
+        Check(!Engine.TryConsumeWheel(Native.VK_WHEELUP), "duplicate 80ms later is dropped");
+        Check(Engine.TryConsumeWheel(Native.VK_WHEELDOWN),
+              "the opposite direction is NOT blocked (separate timers)");
+        System.Threading.Thread.Sleep(230);
+        Check(Engine.TryConsumeWheel(Native.VK_WHEELUP), "passes again once the interval has elapsed");
+
+        cfg.WheelMinIntervalMs = 0;
+        Engine.ResetWheelThrottle();
+        Check(Engine.TryConsumeWheel(Native.VK_WHEELUP), "0 means no throttling (1)");
+        Check(Engine.TryConsumeWheel(Native.VK_WHEELUP), "0 means no throttling (2)");
+        cfg.WheelMinIntervalMs = 300;
+        Engine.ResetWheelThrottle();
+
         // --- 4) 喊话热键表(组合键) ---
         Console.WriteLine("\n[4] chat hotkey table");
         string text;
