@@ -58,10 +58,54 @@ static class EngineTests
         Check(Engine.TryGetMapping(Native.VK_WHEELUP, out dst) && dst == '6', "wheel up -> 6");
         Check(Engine.TryGetMapping(Native.VK_WHEELDOWN, out dst) && dst == '7', "wheel down -> 7");
         Check(Engine.TryGetMapping(Native.VK_XBUTTON2, out dst) && dst == Engine.ItemSlotVk[4],
-              "side button 2 -> item slot 5 (numpad 1)");
+              "side button 2 -> item slot 5");
+
+        // 物品栏 2列x3行，界面上 物品1~3 是左列、4~6 是右列，
+        // 所以目标键顺序必须是竖着数的 7 4 1 8 5 2，不是横着数的 7 8 4 5 1 2
+        Console.WriteLine("\n[2a] item slot layout matches the on-screen 2x3 grid");
+        int[] slot = Scheme.DefaultItemSlotDst();
+        Check(slot[0] == 0x67 && slot[1] == 0x64 && slot[2] == 0x61,
+              "left column top-to-bottom = numpad 7 / 4 / 1");
+        Check(slot[3] == 0x68 && slot[4] == 0x65 && slot[5] == 0x62,
+              "right column top-to-bottom = numpad 8 / 5 / 2");
+        for (int i = 0; i < 6; i++)
+            if (Engine.ItemSlotVk[i] != slot[i])
+                Check(false, "Engine default order matches Scheme default order");
+        Check(true, "Engine default order matches Scheme default order");
+
+        // 旧配置(横向顺序)升级时要被改正
+        AppConfig legacyCfg = new AppConfig();
+        legacyCfg.SetDefaults();
+        legacyCfg.ConfigVersion = 4;
+        legacyCfg.Schemes[0].ItemSlotDst = Scheme.LegacyRowMajorItemSlotDst();
+        legacyCfg.Schemes[0].Maps.Add(NewMap((int)'S', (int)'H'));
+        legacyCfg.FixUp();
+        Check(legacyCfg.Schemes[0].ItemSlotDst[1] == 0x64,
+              "upgrading a v4 config fixes the row-major slot order");
+        bool stillHasManualSH = false;
+        foreach (KeyMapEntry e in legacyCfg.Schemes[0].Maps)
+            if (e.Src == 'S' && e.Dst == 'H') stillHasManualSH = true;
+        Check(!stillHasManualSH, "upgrading removes the manual S->H now that it is built in");
+        Check(legacyCfg.BuiltinStopAsHold, "upgrading turns the built-in S->H on");
         Check(Engine.IsItemSlotSource(Native.VK_XBUTTON2), "side button 2 recognised as an item-slot key");
         Check(!Engine.IsItemSlotSource(Native.VK_XBUTTON1), "side button 1 is not an item-slot key");
         Check(!Engine.TryGetMapping((int)'Q', out dst), "unmapped key stays unmapped");
+
+        // --- 2a2) 内置 S->H：默认开，可关，玩家显式改S时以玩家的为准 ---
+        Console.WriteLine("\n[2a2] built-in S -> H");
+        Check(cfg.BuiltinStopAsHold, "built-in S->H defaults to on");
+        Engine.Rebuild();
+        Check(Engine.TryGetMapping((int)'S', out dst) && dst == 'H', "built-in gives S -> H");
+        s.Maps.Add(NewMap((int)'S', (int)'P'));
+        Engine.Rebuild();
+        Check(Engine.TryGetMapping((int)'S', out dst) && dst == 'P',
+              "an explicit S mapping overrides the built-in");
+        s.Maps.RemoveAt(s.Maps.Count - 1);
+        cfg.BuiltinStopAsHold = false;
+        Engine.Rebuild();
+        Check(!Engine.TryGetMapping((int)'S', out dst), "unchecking the built-in removes S -> H");
+        cfg.BuiltinStopAsHold = true;
+        Engine.Rebuild();
 
         // --- 2b) 必须能识别出"有改键指向小键盘" ---
         // NumLock 关闭时小键盘键在系统层面是 Home/方向键/End，魔兽的物品栏快捷键
@@ -124,6 +168,7 @@ static class EngineTests
         alt.Chats.Clear();
         ChatItem cc = new ChatItem(); cc.Mods = 0; cc.Key = (int)'A'; cc.Text = "-ma";
         alt.Chats.Add(cc);
+        alt.BuiltinStopAsHold = false;      // 这套配置不用内置项
         Engine.Cfg = alt;
         Engine.Rebuild();
 

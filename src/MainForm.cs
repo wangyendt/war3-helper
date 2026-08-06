@@ -97,6 +97,8 @@ namespace WshHelper
         // 改键页
         CheckBox chkRemap, chkCombo, chkWin, chkHeroFirst;
         CaptureBox[] capItems = new CaptureBox[6];
+        Label[] lblSlotDst = new Label[6];
+        CheckBox chkStopAsHold;
         ListView lvMaps;
         CaptureBox capSrc, capDst, capSuspend, capShopEnter, capShopExit;
         CheckBox chkAutoNumLock, chkShopMode, chkShopWheel, chkBlockWheel, chkItemKeepShop;
@@ -374,27 +376,39 @@ namespace WshHelper
         {
             chkRemap = new CheckBox();
             chkRemap.Text = "启用改键 (Ctrl+F2)";
-            chkRemap.Bounds = new Rectangle(12, 10, 160, 22);
+            chkRemap.Bounds = new Rectangle(12, 10, 150, 22);
             chkRemap.CheckedChanged += delegate { if (loading) return; cfg.RemapEnabled = chkRemap.Checked; SaveRebuild(); };
             tp.Controls.Add(chkRemap);
 
             chkCombo = new CheckBox();
             chkCombo.Text = "按住Ctrl/Alt/Shift时仍改键";
-            chkCombo.Bounds = new Rectangle(190, 10, 200, 22);
+            chkCombo.Bounds = new Rectangle(166, 10, 196, 22);
             chkCombo.CheckedChanged += delegate { if (loading) return; cfg.ApplyToCombo = chkCombo.Checked; SaveRebuild(); };
             tp.Controls.Add(chkCombo);
 
             chkWin = new CheckBox();
             chkWin.Text = "游戏中屏蔽Win键";
-            chkWin.Bounds = new Rectangle(410, 10, 150, 22);
+            chkWin.Bounds = new Rectangle(366, 10, 130, 22);
             chkWin.CheckedChanged += delegate { if (loading) return; cfg.BlockWinKey = chkWin.Checked; SaveRebuild(); };
             tp.Controls.Add(chkWin);
+
+            chkStopAsHold = new CheckBox();
+            chkStopAsHold.Text = "内置: S = 原地不动(H)";
+            chkStopAsHold.Bounds = new Rectangle(502, 10, 200, 22);
+            chkStopAsHold.CheckedChanged += delegate
+            {
+                if (loading) return;
+                cfg.BuiltinStopAsHold = chkStopAsHold.Checked;
+                SaveRebuild();
+            };
+            tp.Controls.Add(chkStopAsHold);
 
             GroupBox gItems = new GroupBox();
             gItemsBox = gItems;
             gItems.Text = "物品栏快捷键 (物品1~6 = 小键盘 7 8 4 5 1 2)";
             gItems.Bounds = new Rectangle(12, 40, 330, 130);
             tp.Controls.Add(gItems);
+            // 排列和游戏里的物品栏一致：2列x3行，物品1~3 左列、4~6 右列
             for (int i = 0; i < 6; i++)
             {
                 int col = i / 3, row = i % 3;
@@ -403,7 +417,7 @@ namespace WshHelper
                 l.Bounds = new Rectangle(15 + col * 160, 28 + row * 32, 45, 20);
                 gItems.Controls.Add(l);
                 CaptureBox cb = new CaptureBox();
-                cb.Bounds = new Rectangle(62 + col * 160, 24 + row * 32, 90, 24);
+                cb.Bounds = new Rectangle(62 + col * 160, 24 + row * 32, 68, 24);
                 int idx = i;
                 cb.VkChanged += delegate
                 {
@@ -413,6 +427,13 @@ namespace WshHelper
                 };
                 capItems[i] = cb;
                 gItems.Controls.Add(cb);
+
+                // 直接标出这一格在游戏里的实际快捷键，避免顺序看不明白
+                Label dl = new Label();
+                dl.Bounds = new Rectangle(132 + col * 160, 28 + row * 32, 26, 20);
+                dl.ForeColor = Color.FromArgb(120, 120, 130);
+                lblSlotDst[i] = dl;
+                gItems.Controls.Add(dl);
             }
 
             Button bSlotAdv = new Button();
@@ -996,11 +1017,18 @@ namespace WshHelper
         {
             if (gItemsBox == null) return;
             int[] d = cfg.ActiveScheme.ItemSlotDst;
+            for (int i = 0; i < 6; i++)
+                if (lblSlotDst[i] != null)
+                {
+                    string n = KeyNames.Name(d[i]);
+                    if (n.StartsWith("小键盘")) n = n.Substring(3);   // 只留数字，够窄
+                    lblSlotDst[i].Text = "→" + n;
+                }
             bool isDefault = true;
             int[] def = Scheme.DefaultItemSlotDst();
             for (int i = 0; i < 6; i++) if (d[i] != def[i]) { isDefault = false; break; }
             gItemsBox.Text = isDefault
-                ? "物品栏快捷键 (物品1~6 = 小键盘 7 8 4 5 1 2)"
+                ? "物品栏快捷键 (右侧 → 是游戏里的小键盘键)"
                 : "物品栏快捷键 (目标键已自定义)";
         }
 
@@ -1570,7 +1598,14 @@ namespace WshHelper
 "  不用切出游戏就能改方案、开关血条/APM、开始计时、伪全屏、发喊话、打开录像目录。\r\n" +
 "  需要窗口化或无边框全屏模式（独占全屏下任何悬浮窗都无法显示）。\r\n\r\n" +
 "【改键】\r\n" +
-"  · 物品栏快捷键: 把顺手的键映射到小键盘 7 8 4 5 1 2 (魔兽物品栏6格)。\r\n" +
+"  · 物品栏快捷键: 魔兽物品栏是2列x3行，默认对应小键盘左边两列(位置一一对应):\r\n" +
+"        物品1→小键盘7   物品4→小键盘8\r\n" +
+"        物品2→小键盘4   物品5→小键盘5\r\n" +
+"        物品3→小键盘1   物品6→小键盘2\r\n" +
+"    界面上每个格子右边直接标了目标键，对照游戏里的物品栏位置看即可。\r\n" +
+"    用了War3自定义快捷键的话点\"目标键...\"改成你实际用的键。\r\n" +
+"  · 内置\"S键改为原地不动(H)\": 默认开启。H能打断攻击后摇而S不能，DOTA里常用。\r\n" +
+"    在自定义列表里显式给S设了别的映射时以你自己设的为准。\r\n" +
 "  · 自定义改键: 任意键→任意键，支持鼠标中键/侧键/滚轮，也支持键盘键→鼠标左右键。\r\n" +
 "  · 多方案: 不同地图用不同方案，游戏中 Ctrl+F3 或悬浮菜单一键切换。\r\n" +
 "  · 改键只在魔兽窗口激活时生效，切出游戏自动失效。\r\n\r\n" +
@@ -1809,6 +1844,7 @@ namespace WshHelper
             chkAlwaysBars.Checked = cfg.AlwaysHealthBars;
             chkIcon.Checked = cfg.InGameIcon;
             chkHeroFirst.Checked = cfg.ItemKeySelectHeroFirst;
+            chkStopAsHold.Checked = cfg.BuiltinStopAsHold;
             capSuspend.Vk = cfg.SuspendKey;
             chkAutoNumLock.Checked = cfg.AutoNumLock;
             chkShopMode.Checked = cfg.ShopModeEnabled;

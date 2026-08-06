@@ -21,9 +21,20 @@ namespace WshHelper
         public bool ItemKeysKeepInShop { get; set; } // 商店模式下物品栏键仍然生效
         public List<KeyMapEntry> Maps { get; set; }
 
-        // 魔兽默认的物品栏快捷键：小键盘 7 8 4 5 1 2。
+        // 魔兽物品栏是 2列x3行，对应小键盘左边那 2 列:
+        //     物品1(小键盘7)  物品4(小键盘8)
+        //     物品2(小键盘4)  物品5(小键盘5)
+        //     物品3(小键盘1)  物品6(小键盘2)
+        // 界面上物品1~3 是左列、4~6 是右列(竖着数)，所以顺序是 7 4 1 8 5 2，
+        // 不是横着数的 7 8 4 5 1 2。
         // 用了 War3 自定义快捷键(CustomKeys.txt)的话物品栏可能是别的键，所以做成可改的。
         public static int[] DefaultItemSlotDst()
+        {
+            return new int[] { 0x67, 0x64, 0x61, 0x68, 0x65, 0x62 };
+        }
+
+        // 3.x 之前用的横向顺序，用来识别需要迁移的旧配置
+        public static int[] LegacyRowMajorItemSlotDst()
         {
             return new int[] { 0x67, 0x68, 0x64, 0x65, 0x61, 0x62 };
         }
@@ -107,6 +118,7 @@ namespace WshHelper
         public int ShopEnterKey { get; set; }              // 额外的进入键(0=未设)
         public int ShopExitKey { get; set; }               // 恢复键(默认F1)
         public int HeroSelectKey { get; set; }             // 选中自己英雄的键(默认F1)
+        public bool BuiltinStopAsHold { get; set; }        // 内置: S 键改为原地不动(H)
         public int ChatEnterDelay { get; set; }            // 回车后等待毫秒
         public int ChatCharDelay { get; set; }             // 每个字符间隔毫秒
         public int IconX { get; set; }
@@ -225,7 +237,7 @@ namespace WshHelper
             catch { }
         }
 
-        public const int CurrentConfigVersion = 4;
+        public const int CurrentConfigVersion = 5;
 
         public void SetDefaults()
         {
@@ -281,6 +293,7 @@ namespace WshHelper
             ShopExitKey = 0x70;   // F1 = 重新选中英雄
             HeroSelectKey = 0x70;
             BlockWheelZoom = true;
+            BuiltinStopAsHold = true;
         }
 
         static ChatItem Chat(int mods, int key, string text, string note)
@@ -406,6 +419,28 @@ namespace WshHelper
                 BlockWheelZoom = true;
             }
             if (HeroSelectKey == 0) HeroSelectKey = 0x70;
+
+            // ConfigVersion 5:
+            //  a) 物品栏目标键顺序修正 —— 之前是横向的 7 8 4 5 1 2，而界面上
+            //     物品1~3 是左列、4~6 是右列，正确顺序应为 7 4 1 8 5 2
+            //  b) S->H 变成内置可勾选项，把手动添加的同款映射清掉，避免重复
+            if (ConfigVersion < 5)
+            {
+                BuiltinStopAsHold = true;
+                int[] legacy = Scheme.LegacyRowMajorItemSlotDst();
+                foreach (Scheme s in Schemes)
+                {
+                    bool isLegacy = true;
+                    for (int i = 0; i < 6; i++)
+                        if (s.ItemSlotDst[i] != legacy[i]) { isLegacy = false; break; }
+                    if (isLegacy) s.ItemSlotDst = Scheme.DefaultItemSlotDst();
+                    s.Maps.RemoveAll(delegate(KeyMapEntry e)
+                    {
+                        return e.Src == (int)'S' && e.Dst == (int)'H';
+                    });
+                }
+            }
+
             if (ConfigVersion < CurrentConfigVersion) ConfigVersion = CurrentConfigVersion;
             if (LaunchModeValue < 0 || LaunchModeValue > 2) LaunchModeValue = (int)LaunchMode.BorderlessFullscreen;
             if (string.IsNullOrEmpty(VerSourceDir)) VerSourceDir = War3Version.DefaultSourceDir(War3Path);

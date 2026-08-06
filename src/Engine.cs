@@ -18,9 +18,9 @@ namespace WshHelper
     public static class Engine
     {
         // 物品栏1~6对应小键盘 7 8 4 5 1 2
-        // 魔兽默认的物品栏快捷键。实际用哪几个键由 Scheme.ItemSlotDst 决定，
-        // 这里只是默认值 —— 用了 War3 自定义快捷键的人物品栏可能不是小键盘。
-        public static readonly int[] ItemSlotVk = new int[] { 0x67, 0x68, 0x64, 0x65, 0x61, 0x62 };
+        // 魔兽默认的物品栏快捷键(界面顺序: 物品1~3=左列, 4~6=右列)。
+        // 实际用哪几个键由 Scheme.ItemSlotDst 决定，这里只是默认值。
+        public static readonly int[] ItemSlotVk = new int[] { 0x67, 0x64, 0x61, 0x68, 0x65, 0x62 };
 
         public static bool IsNumpadVk(int vk) { return vk >= 0x60 && vk <= 0x69; }
 
@@ -155,6 +155,10 @@ namespace WshHelper
                         item.Add(s.ItemKeys[i]);
                         if (s.ItemKeysKeepInShop) keep.Add(s.ItemKeys[i]);
                     }
+                // 内置改键：S(停止) 改为 H(原地不动)。DOTA里常用，H能打断攻击后摇而S不能。
+                // 玩家在自定义列表里显式改了S的话以他的为准，所以放在自定义之前。
+                if (Cfg.BuiltinStopAsHold) m[(int)'S'] = (int)'H';
+
                 foreach (KeyMapEntry e in s.Maps)
                     if (e.Src != 0 && e.Dst != 0 && e.Src != e.Dst)
                     {
