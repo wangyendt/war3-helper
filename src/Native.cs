@@ -238,6 +238,33 @@ namespace WshHelper
         [DllImport("user32.dll")]
         public static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern short VkKeyScan(char ch);
+
+        [DllImport("user32.dll")]
+        public static extern bool GetCursorPos(out POINT lpPoint);
+
+        // 低层钩子回调里按偏移直读字段，避免 Marshal.PtrToStructure 的装箱分配。
+        // 偏移用 OffsetOf 算出来，32/64 位都正确。
+        public static readonly int KbdVkCodeOffset =
+            Marshal.OffsetOf(typeof(KBDLLHOOKSTRUCT), "vkCode").ToInt32();
+        public static readonly int KbdExtraInfoOffset =
+            Marshal.OffsetOf(typeof(KBDLLHOOKSTRUCT), "dwExtraInfo").ToInt32();
+        public static readonly int MouseDataOffset =
+            Marshal.OffsetOf(typeof(MSLLHOOKSTRUCT), "mouseData").ToInt32();
+        public static readonly int MouseExtraInfoOffset =
+            Marshal.OffsetOf(typeof(MSLLHOOKSTRUCT), "dwExtraInfo").ToInt32();
+
+        public static IntPtr ReadExtraInfo(IntPtr lParam, int offset)
+        {
+            return Marshal.ReadIntPtr(lParam, offset);
+        }
+
+        public static int ReadInt(IntPtr lParam, int offset)
+        {
+            return Marshal.ReadInt32(lParam, offset);
+        }
+
         // ---- 分层窗口(逐像素透明) ----
         public const int ULW_ALPHA = 0x00000002;
         public const byte AC_SRC_OVER = 0x00;

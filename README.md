@@ -94,11 +94,37 @@ powershell -ExecutionPolicy Bypass -File build-test.ps1
 - ✅ 改键只在魔兽前台时生效，切出游戏不影响其他程序
 - ❌ 未包含依赖内存注入的功能：AI 一键操作指令、JASS 脚本引擎
 
+## 配置保存在哪
+
+改键方案等配置存在 **`%APPDATA%\WshHelper\config.json`**，重新编译助手、删除 `bin\`、
+重新 clone 仓库都不会丢。写入是原子的（先写临时文件再替换，并留一份 `.bak`），
+中途崩溃不会损坏配置。喊话页有「配置文件位置」按钮可直接定位。
+
+想让配置跟着程序走（绿色版），在 exe 旁边放一个空的 `portable.txt` 即可。
+旧版本把配置放在 exe 目录，首次运行会自动搬到 AppData（原文件重命名为 `config.json.migrated` 留底）。
+
+## 低层钩子为什么需要看门狗
+
+Windows 对低层键鼠钩子有 `LowLevelHooksTimeout` 限制（默认 300ms）：回调超时的钩子会被
+系统**静默移除**，没有任何通知，之后所有事件都不再回调。
+
+鼠标钩子每秒会被调用上千次（鼠标移动），最容易中招——表现就是「键盘改键还有效、
+鼠标侧键/滚轮改键突然失灵」。为此：
+
+- 回调里不做 `Marshal.PtrToStructure`（会装箱分配、制造 GC 压力），改为按偏移直读字段；
+- 鼠标移动在读取任何字段之前就返回；
+- 回调里不查进程信息（`Process.GetProcessById` 很贵），魔兽窗口句柄由 UI 线程定时缓存好；
+- `WatchdogTick()` 检测「鼠标在动但钩子没被回调」，超过 1.5 秒判定钩子已死并自动重装，
+  状态栏会显示重装次数。
+
 ## 常见问题
 
 - **局内悬浮图标 / APM 看不到**：独占全屏模式下任何悬浮窗都无法显示，请用默认的「无边框全屏」。
-- **改键无反应**：确认魔兽不是以管理员身份运行；若是，把本助手也以管理员运行。
-- **换电脑**：把整个 bin 目录（含 config.json）拷走即可。
+- **改键无反应**：确认魔兽不是以管理员身份运行；若是，把本助手也以管理员运行
+  （权限低的进程无法向权限高的进程发送输入）。
+- **喊话发不出来**：把喊话页下方的「发送速度」两个值调大。英文命令走真实按键最稳；
+  中文靠 Unicode 注入，部分魔兽版本收不到。
+- **在商店误买东西**：改键页勾选「物品键先选中英雄 (F1)」。
 
 ## 从源码构建
 
@@ -126,4 +152,12 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `src/InGameMenu.cs` | 局内可拖动半透明图标 + 分级菜单（分层窗口逐像素透明） |
 | `src/MainForm.cs` | 主界面 |
 | `tools/MakeIcon.cs` | 构建期图标生成工具 |
+| `tools/TestMain.cs` | 测试入口 |
 | `tools/TestVersionSwitch.cs` | 版本切换沙箱测试 |
+| `tools/TestEngine.cs` | 改键表/钩子结构体偏移/喊话输入路径测试 |
+
+跑测试（不需要开着游戏，锁屏也能跑）：
+
+```bash
+powershell -ExecutionPolicy Bypass -File build-test.ps1
+```

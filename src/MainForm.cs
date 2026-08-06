@@ -95,7 +95,7 @@ namespace WshHelper
         bool loading = true;
 
         // 改键页
-        CheckBox chkRemap, chkCombo, chkWin;
+        CheckBox chkRemap, chkCombo, chkWin, chkHeroFirst;
         CaptureBox[] capItems = new CaptureBox[6];
         ListView lvMaps;
         CaptureBox capSrc, capDst;
@@ -106,6 +106,7 @@ namespace WshHelper
         CaptureBox capChatKey;
         CheckBox chkMCtrl, chkMAlt, chkMShift;
         TextBox txtChat, txtChatNote;
+        NumericUpDown numEnterDelay, numCharDelay;
         // 窗口页
         TextBox txtPath;
         ComboBox cmbRes, cmbLaunch;
@@ -297,19 +298,31 @@ namespace WshHelper
         public void ActExit() { reallyExit = true; Close(); }
 
         // ================= 主循环 =================
+        int tickCount = 0;
+
         void OnMainTick(object s, EventArgs e)
         {
+            tickCount++;
+            // 每约1秒刷新一次"魔兽窗口"缓存，并让钩子里的前台记忆失效
+            if (tickCount % 3 == 0)
+            {
+                War3Ctl.RefreshWar3WindowCache();
+                Engine.InvalidateForegroundMemo();
+            }
+            Engine.WatchdogTick();      // 钩子被系统摘掉时自动重装
             War3Ctl.MaintainClip(cfg.AutoLockMouse);
             Engine.TickBars();
             if (iconForm != null) iconForm.Sync();
             bool found = War3Ctl.MainWindow() != IntPtr.Zero;
             string bars = cfg.ShowHpBars ? (Engine.BarsActive ? "开(生效中)" : "开(待机)") : "关";
-            lblStatus.Text = string.Format("魔兽: {0}    改键: {1}    方案: {2}    血条常显: {3}    老板键: {4}",
+            string hook = Engine.ReinstallCount > 0 ? "  钩子已自动重装" + Engine.ReinstallCount + "次" : "";
+            lblStatus.Text = string.Format("魔兽: {0}    改键: {1}    方案: {2}    血条常显: {3}    老板键: {4}{5}",
                 found ? (Engine.War3Foreground() ? "游戏中" : "已找到") : "未运行",
                 cfg.RemapEnabled ? "开" : "关",
                 cfg.ActiveScheme.Name,
                 bars,
-                KeyNames.Name(cfg.BossKey));
+                KeyNames.Name(cfg.BossKey),
+                hook);
         }
 
         // ================= UI构建 =================
@@ -386,15 +399,27 @@ namespace WshHelper
                 gItems.Controls.Add(cb);
             }
 
+            chkHeroFirst = new CheckBox();
+            chkHeroFirst.Text = "物品键先选中英雄 (F1)";
+            chkHeroFirst.Bounds = new Rectangle(14, 174, 330, 22);
+            chkHeroFirst.CheckedChanged += delegate
+            {
+                if (loading) return;
+                cfg.ItemKeySelectHeroFirst = chkHeroFirst.Checked;
+                SaveRebuild();
+            };
+            tp.Controls.Add(chkHeroFirst);
+
             Label hint = new Label();
-            hint.Text = "点击输入框后按键即可设置（支持鼠标侧键/中键/滚轮），双击清除。";
-            hint.Bounds = new Rectangle(14, 174, 330, 36);
+            hint.Text = "打开后按物品键会先按一下F1，这样选中商店或小兵时也不会误买东西。\r\n" +
+                        "点击输入框后按键即可设置（支持鼠标侧键/中键/滚轮），双击清除。";
+            hint.Bounds = new Rectangle(14, 198, 336, 40);
             hint.ForeColor = Color.DimGray;
             tp.Controls.Add(hint);
 
             GroupBox gScheme = new GroupBox();
             gScheme.Text = "改键方案 (Ctrl+F3 游戏中切换)";
-            gScheme.Bounds = new Rectangle(12, 214, 330, 100);
+            gScheme.Bounds = new Rectangle(12, 244, 330, 100);
             tp.Controls.Add(gScheme);
 
             cmbSchemes = new ComboBox();
@@ -495,7 +520,7 @@ namespace WshHelper
 
             Label hint2 = new Label();
             hint2.Text = "改键仅在魔兽窗口为前台时生效，不影响其他程序。";
-            hint2.Bounds = new Rectangle(14, 320, 330, 40);
+            hint2.Bounds = new Rectangle(14, 350, 330, 40);
             hint2.ForeColor = Color.DimGray;
             tp.Controls.Add(hint2);
         }
@@ -507,6 +532,22 @@ namespace WshHelper
             chkChat.Bounds = new Rectangle(12, 10, 280, 22);
             chkChat.CheckedChanged += delegate { if (loading) return; cfg.ChatEnabled = chkChat.Checked; SaveRebuild(); };
             tp.Controls.Add(chkChat);
+
+            Button bCfgDir = new Button();
+            bCfgDir.Text = "配置文件位置";
+            bCfgDir.Bounds = new Rectangle(400, 6, 120, 28);
+            bCfgDir.Click += delegate
+            {
+                MessageBox.Show(this,
+                    "改键方案等配置保存在:\r\n\r\n" + AppConfig.ConfigPath + "\r\n\r\n" +
+                    "重新编译助手、删除 bin 目录都不会影响它。\r\n" +
+                    "想让配置跟着程序走(绿色版)，在 exe 旁边放一个空的 portable.txt 即可。",
+                    "配置文件位置", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                try { System.Diagnostics.Process.Start("explorer.exe",
+                        "/select,\"" + AppConfig.ConfigPath + "\""); }
+                catch { }
+            };
+            tp.Controls.Add(bCfgDir);
 
             Button bReset = new Button();
             bReset.Text = "恢复默认DOTA命令";
@@ -623,11 +664,35 @@ namespace WshHelper
             };
             tp.Controls.Add(bTest);
 
+            Label lsp = new Label();
+            lsp.Text = "发送速度 —— 回车后等待:";
+            lsp.Bounds = new Rectangle(12, 432, 160, 20);
+            tp.Controls.Add(lsp);
+            numEnterDelay = new NumericUpDown();
+            numEnterDelay.Minimum = 30; numEnterDelay.Maximum = 2000; numEnterDelay.Increment = 10;
+            numEnterDelay.Bounds = new Rectangle(174, 428, 70, 24);
+            numEnterDelay.ValueChanged += delegate { if (loading) return; cfg.ChatEnterDelay = (int)numEnterDelay.Value; cfg.Save(); };
+            tp.Controls.Add(numEnterDelay);
+            Label lsp2 = new Label();
+            lsp2.Text = "毫秒，每字间隔:";
+            lsp2.Bounds = new Rectangle(250, 432, 100, 20);
+            tp.Controls.Add(lsp2);
+            numCharDelay = new NumericUpDown();
+            numCharDelay.Minimum = 1; numCharDelay.Maximum = 200;
+            numCharDelay.Bounds = new Rectangle(352, 428, 60, 24);
+            numCharDelay.ValueChanged += delegate { if (loading) return; cfg.ChatCharDelay = (int)numCharDelay.Value; cfg.Save(); };
+            tp.Controls.Add(numCharDelay);
+            Label lsp3 = new Label();
+            lsp3.Text = "毫秒（发不出来就把两个值调大）";
+            lsp3.Bounds = new Rectangle(418, 432, 260, 20);
+            lsp3.ForeColor = Color.DimGray;
+            tp.Controls.Add(lsp3);
+
             Label hint = new Label();
             hint.Text = "· 默认DOTA命令用 Alt+数字 触发（War3本身不占用Alt+数字），可自行改成任意组合键。\r\n" +
                         "· 发送到的频道 = 你在游戏里最后一次聊天选的频道（默认队伍/全部）。开局模式命令请先切到全部。\r\n" +
-                        "· 没设热键的条目不会触发，但仍可从局内悬浮图标菜单里点击发送。";
-            hint.Bounds = new Rectangle(12, 430, 690, 60);
+                        "· 英文命令按真实键盘按键逐字敲入；中文靠Unicode注入，部分版本的魔兽可能不接受。";
+            hint.Bounds = new Rectangle(12, 456, 690, 60);
             hint.ForeColor = Color.DimGray;
             tp.Controls.Add(hint);
         }
@@ -1201,10 +1266,17 @@ namespace WshHelper
 "  · 多方案: 不同地图用不同方案，游戏中 Ctrl+F3 或悬浮菜单一键切换。\r\n" +
 "  · 改键只在魔兽窗口激活时生效，切出游戏自动失效。\r\n\r\n" +
 "【快捷喊话】\r\n" +
-"  按热键自动完成: 回车→输入文本→回车，支持中文和组合键(Ctrl/Alt/Shift)。\r\n" +
+"  按热键自动完成: 回车→输入文本→回车，支持组合键(Ctrl/Alt/Shift)。\r\n" +
 "  已内置DOTA常用命令，默认绑到 Alt+1 ~ Alt+0:\r\n" +
 "    Alt+1 -aphehg   Alt+2 -apemhg  Alt+3 -arem    Alt+4 -test   Alt+5 -ii\r\n" +
-"    Alt+6 -di       Alt+7 -ma      Alt+8 -cson    Alt+9 -random Alt+0 -repick\r\n\r\n" +
+"    Alt+6 -di       Alt+7 -ma      Alt+8 -cson    Alt+9 -random Alt+0 -repick\r\n" +
+"  英文按真实键盘按键逐字敲入(和你自己打字一样)，兼容性最好；\r\n" +
+"  中文只能靠Unicode注入，部分魔兽版本可能收不到。\r\n" +
+"  发不出来时，把喊话页下方的\"发送速度\"两个值调大再试。\r\n\r\n" +
+"【物品键先选英雄】\r\n" +
+"  改键页的这个勾选项打开后，按物品键会先自动按一下F1选中自己英雄，\r\n" +
+"  再按物品栏格子。这样选中商店、小兵、召唤物时按物品键也不会误买/误操作，\r\n" +
+"  物品键永远作用在自己英雄身上。\r\n\r\n" +
 "【血条/蓝条常显】\r\n" +
 "  自动替你按住 Alt —— 魔兽按住Alt会显示所有单位血条，DOTA等地图同时显示蓝条。\r\n" +
 "  你一操作就自动松开(不会误发Alt+点击信号)，停手0.3秒后自动按回。\r\n" +
@@ -1224,8 +1296,13 @@ namespace WshHelper
 "  · 原版的显血显蓝靠内存补丁(原版自己也提示有封号风险)，本工具改用Alt方案。\r\n\r\n" +
 "【提示】\r\n" +
 "  · 关闭窗口 = 最小化到托盘继续工作，托盘右键→退出 才是真正退出。\r\n" +
-"  · 如按键映射后游戏无反应，请把本助手也以管理员身份运行。\r\n" +
-"  · 配置保存在助手目录 config.json，可随意备份/复制到其他电脑。\r\n";
+"  · 如按键映射后游戏无反应，请把本助手也以管理员身份运行\r\n" +
+"    (魔兽以管理员运行时，普通权限的助手无法向它发送按键)。\r\n" +
+"  · 配置(含改键方案)保存在 %APPDATA%\\WshHelper\\config.json，\r\n" +
+"    重新编译助手、删除bin目录都不会丢。喊话页有\"配置文件位置\"按钮可直接打开。\r\n" +
+"    想让配置跟着程序走(绿色版)，在exe旁边放一个空的 portable.txt 即可。\r\n" +
+"  · Windows 会把耗时过长的低层钩子静默摘掉(默认300ms超时)，助手带看门狗，\r\n" +
+"    检测到钩子失效会自动重装，状态栏会显示重装次数。\r\n";
             tp.Controls.Add(t);
         }
 
@@ -1405,6 +1482,9 @@ namespace WshHelper
             chkHpBars.Checked = cfg.ShowHpBars;
             chkAlwaysBars.Checked = cfg.AlwaysHealthBars;
             chkIcon.Checked = cfg.InGameIcon;
+            chkHeroFirst.Checked = cfg.ItemKeySelectHeroFirst;
+            numEnterDelay.Value = Math.Max(30, Math.Min(2000, cfg.ChatEnterDelay));
+            numCharDelay.Value = Math.Max(1, Math.Min(200, cfg.ChatCharDelay));
             txtPath.Text = cfg.War3Path;
             txtVerDir.Text = cfg.VerSourceDir;
             cmbLaunch.SelectedIndex = cfg.LaunchModeValue;

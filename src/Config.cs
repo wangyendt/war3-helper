@@ -86,6 +86,9 @@ namespace WshHelper
         public bool ShowHpBars { get; set; }        // 持续按住Alt显示血条/蓝条
         public bool AlwaysHealthBars { get; set; }  // 注册表 healthbars 开关
         public bool InGameIcon { get; set; }
+        public bool ItemKeySelectHeroFirst { get; set; }   // 物品键先按F1选英雄
+        public int ChatEnterDelay { get; set; }            // 回车后等待毫秒
+        public int ChatCharDelay { get; set; }             // 每个字符间隔毫秒
         public int IconX { get; set; }
         public int IconY { get; set; }
         public int IconOpacity { get; set; }
@@ -111,9 +114,55 @@ namespace WshHelper
             set { LaunchModeValue = (int)value; }
         }
 
+        // 配置默认存到 %APPDATA%\WshHelper\config.json —— 这样删掉 bin\、重新编译、
+        // 重新 clone 仓库都不会丢改键方案。
+        // 如果 exe 旁边已经有 config.json(旧版本或绿色版用法)，就继续用那个。
+        static string _configPath;
+
+        static string ExeDir { get { return AppDomain.CurrentDomain.BaseDirectory; } }
+
         public static string ConfigPath
         {
-            get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json"); }
+            get
+            {
+                if (_configPath != null) return _configPath;
+                string portable = Path.Combine(ExeDir, "config.json");
+
+                // 绿色版模式：exe 旁放一个 portable.txt，配置就跟着程序走
+                if (File.Exists(Path.Combine(ExeDir, "portable.txt")))
+                {
+                    _configPath = portable;
+                    return _configPath;
+                }
+
+                string dir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WshHelper");
+                string appData = Path.Combine(dir, "config.json");
+                try
+                {
+                    Directory.CreateDirectory(dir);
+                    // 旧版把配置放在 exe 目录，首次运行时搬过来，避免重新编译/删bin丢方案
+                    if (!File.Exists(appData) && File.Exists(portable))
+                    {
+                        File.Copy(portable, appData, false);
+                        try { File.Move(portable, portable + ".migrated"); }
+                        catch { }
+                    }
+                }
+                catch { _configPath = portable; return _configPath; }
+
+                _configPath = appData;
+                return _configPath;
+            }
+        }
+
+        public static bool IsPortableConfig
+        {
+            get
+            {
+                return string.Equals(Path.GetDirectoryName(ConfigPath).TrimEnd('\\'),
+                                     ExeDir.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         public static AppConfig Load()
@@ -135,12 +184,23 @@ namespace WshHelper
             return d;
         }
 
+        // 原子写入：先写临时文件再替换，避免写到一半崩溃导致配置损坏丢方案
         public void Save()
         {
             try
             {
                 JavaScriptSerializer ser = new JavaScriptSerializer();
-                File.WriteAllText(ConfigPath, ser.Serialize(this), Encoding.UTF8);
+                string json = ser.Serialize(this);
+                string tmp = ConfigPath + ".tmp";
+                File.WriteAllText(tmp, json, Encoding.UTF8);
+                if (File.Exists(ConfigPath))
+                {
+                    string bak = ConfigPath + ".bak";
+                    try { File.Copy(ConfigPath, bak, true); }
+                    catch { }
+                    File.Delete(ConfigPath);
+                }
+                File.Move(tmp, ConfigPath);
             }
             catch { }
         }
@@ -191,6 +251,9 @@ namespace WshHelper
             IconY = 8;
             IconOpacity = 65;
             AlwaysHealthBars = true;
+            ItemKeySelectHeroFirst = false;
+            ChatEnterDelay = 150;
+            ChatCharDelay = 12;
         }
 
         static ChatItem Chat(int mods, int key, string text, string note)
@@ -290,6 +353,8 @@ namespace WshHelper
             }
 
             if (IconOpacity < 20 || IconOpacity > 100) IconOpacity = 65;
+            if (ChatEnterDelay < 30 || ChatEnterDelay > 2000) ChatEnterDelay = 150;
+            if (ChatCharDelay < 1 || ChatCharDelay > 200) ChatCharDelay = 12;
             if (LaunchModeValue < 0 || LaunchModeValue > 2) LaunchModeValue = (int)LaunchMode.BorderlessFullscreen;
             if (string.IsNullOrEmpty(VerSourceDir)) VerSourceDir = War3Version.DefaultSourceDir(War3Path);
         }

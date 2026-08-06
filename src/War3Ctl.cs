@@ -33,6 +33,8 @@ namespace WshHelper
     // 魔兽窗口控制：查找/窗口化启动/无边框/锁鼠标/老板键隐藏
     public static class War3Ctl
     {
+        // 完整判定：会查进程名。**不要在低层钩子回调里调用**（Process.GetProcessById 很贵，
+        // 会让钩子超过 LowLevelHooksTimeout 而被系统摘掉）。
         public static bool IsWar3Window(IntPtr hWnd)
         {
             if (hWnd == IntPtr.Zero) return false;
@@ -49,6 +51,33 @@ namespace WshHelper
                 return n == "war3" || n == "warcraft iii" || n == "frozen throne" || n == "16_war3";
             }
             catch { return false; }
+        }
+
+        // 钩子专用的快速判定：只做一次 GetClassName + 一个数组查找，不碰进程信息。
+        // 进程名匹配的窗口由 RefreshWar3WindowCache() 在UI线程上预先算好。
+        static IntPtr[] _war3HwndCache = new IntPtr[0];
+
+        public static bool IsWar3WindowFast(IntPtr hWnd)
+        {
+            if (hWnd == IntPtr.Zero) return false;
+            StringBuilder sb = new StringBuilder(32);
+            Native.GetClassName(hWnd, sb, 32);
+            if (sb.ToString() == "Warcraft III") return true;
+            IntPtr[] cache = _war3HwndCache;
+            for (int i = 0; i < cache.Length; i++)
+                if (cache[i] == hWnd) return true;
+            return false;
+        }
+
+        // 由UI定时器调用，刷新"属于魔兽进程的窗口"缓存
+        public static void RefreshWar3WindowCache()
+        {
+            try
+            {
+                List<IntPtr> l = FindWar3Windows();
+                _war3HwndCache = l.ToArray();
+            }
+            catch { }
         }
 
         static readonly string[] War3ProcNames = new string[] { "war3", "warcraft iii", "frozen throne", "16_war3" };

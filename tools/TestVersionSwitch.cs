@@ -8,7 +8,7 @@ using WshHelper;
 // 沙箱测试：在临时目录里模拟一个魔兽安装 + 两个版本包，验证切换/切回不会丢文件。
 // 用 build-test.ps1 编译运行，不会碰真实游戏目录。
 // 测的是 ApplySwitch(纯文件逻辑)，不走 SwitchTo，这样结果不受"此刻有没有开着魔兽"影响。
-static class TestVersionSwitch
+static class VersionSwitchTests
 {
     static int failures = 0;
 
@@ -43,8 +43,9 @@ static class TestVersionSwitch
         }
     }
 
-    static int Main(string[] args)
+    public static int Run()
     {
+        Console.WriteLine("===== VERSION SWITCH TESTS =====");
         string root = Path.Combine(Path.GetTempPath(), "wsh_vertest");
         if (Directory.Exists(root)) Directory.Delete(root, true);
         string war3 = Path.Combine(root, "war3");
@@ -144,9 +145,9 @@ static class TestVersionSwitch
             Console.WriteLine("  SKIP  war3 not running, cannot exercise the guard");
         }
 
-        Console.WriteLine("\n" + (failures == 0 ? "ALL TESTS PASSED" : failures + " TEST(S) FAILED"));
+        Console.WriteLine("\n" + (failures == 0 ? "VERSION TESTS PASSED" : failures + " VERSION TEST(S) FAILED"));
         try { Directory.Delete(root, true); }
         catch { }
-        return failures == 0 ? 0 : 1;
+        return failures;
     }
 }

@@ -7,12 +7,21 @@ using System.Threading;
 namespace WshHelper
 {
     // 键盘/鼠标底层钩子 + 改键引擎 + 喊话 + APM统计 + 血条常显
+    //
+    // 低层钩子的硬性约束：回调必须在 LowLevelHooksTimeout(默认300ms)内返回，
+    // 否则 Windows 会**静默移除**这个钩子，之后所有事件都不再回调。
+    // 鼠标钩子每秒会被调用上千次(鼠标移动)，所以回调里：
+    //   - 不做 Marshal.PtrToStructure(会装箱分配，制造GC压力)
+    //   - 不查进程信息(Process.GetProcessById 很贵)
+    //   - 鼠标移动在读取任何字段之前就直接返回
+    // 另外 WatchdogTick() 会检测钩子是否已被摘掉并自动重装。
     public static class Engine
     {
         // 物品栏1~6对应小键盘 7 8 4 5 1 2
         public static readonly int[] ItemSlotVk = new int[] { 0x67, 0x68, 0x64, 0x65, 0x61, 0x62 };
 
         public const int VK_ALT = 0x12;
+        public const int VK_F1 = 0x70;
 
         public static AppConfig Cfg;
 
@@ -29,7 +38,7 @@ namespace WshHelper
         static Native.HookProc _msProc;
 
         static Dictionary<int, int> _map = new Dictionary<int, int>();
-        // 喊话表: key = vk | (mods << 16)
+        static HashSet<int> _itemSrc = new HashSet<int>();      // 映射到物品栏的源键
         static Dictionary<int, string> _chatMap = new Dictionary<int, string>();
         static readonly HashSet<int> _swallowedUp = new HashSet<int>();
         static readonly bool[] _phyDown = new bool[256];
@@ -39,9 +48,12 @@ namespace WshHelper
         static volatile bool _synthAlt = false;
         static uint _altResumeAt = 0;
 
-        // war3前台状态缓存
-        static bool _fgCached = false;
-        static uint _fgCheckedAt = 0;
+        // 钩子存活计数（看门狗用）
+        static int _msTicks = 0;
+        static int _kbTicks = 0;
+        public static int MouseHookTicks { get { return _msTicks; } }
+        public static int ReinstallCount { get { return _reinstalls; } }
+        static int _reinstalls = 0;
 
         // APM
         static readonly object _apmLock = new object();
@@ -49,6 +61,7 @@ namespace WshHelper
 
         public static void Install()
         {
+            Uninstall();
             _kbProc = KbProc;
             _msProc = MsProc;
             IntPtr hMod = Native.GetModuleHandle(null);
@@ -63,36 +76,110 @@ namespace WshHelper
             if (_msHook != IntPtr.Zero) { Native.UnhookWindowsHookEx(_msHook); _msHook = IntPtr.Zero; }
         }
 
+        // ---- 看门狗：钩子被系统摘掉后自动重装 ----
+        static Native.POINT _lastCursor;
+        static int _lastMsTicks;
+        static uint _suspectSince;
+
+        public static void WatchdogTick()
+        {
+            Native.POINT cur;
+            if (!Native.GetCursorPos(out cur)) return;
+            bool moved = (cur.x != _lastCursor.x || cur.y != _lastCursor.y);
+            _lastCursor = cur;
+
+            if (!moved) { _suspectSince = 0; _lastMsTicks = _msTicks; return; }
+
+            // 鼠标在动，钩子却一次都没被回调 -> 大概率已被系统移除
+            if (_msTicks == _lastMsTicks)
+            {
+                uint now = (uint)Environment.TickCount;
+                if (_suspectSince == 0) _suspectSince = now;
+                else if (now - _suspectSince > 1500)
+                {
+                    _reinstalls++;
+                    Install();
+                    _suspectSince = 0;
+                }
+            }
+            else
+            {
+                _suspectSince = 0;
+            }
+            _lastMsTicks = _msTicks;
+        }
+
         public static int ChatKey(int mods, int vk) { return (vk & 0xFFFF) | (mods << 16); }
 
         // 根据当前方案重建映射表
         public static void Rebuild()
         {
             Dictionary<int, int> m = new Dictionary<int, int>();
+            HashSet<int> item = new HashSet<int>();
             Dictionary<int, string> cm = new Dictionary<int, string>();
             if (Cfg != null)
             {
                 Scheme s = Cfg.ActiveScheme;
                 for (int i = 0; i < 6; i++)
-                    if (s.ItemKeys[i] != 0) m[s.ItemKeys[i]] = ItemSlotVk[i];
+                    if (s.ItemKeys[i] != 0) { m[s.ItemKeys[i]] = ItemSlotVk[i]; item.Add(s.ItemKeys[i]); }
                 foreach (KeyMapEntry e in s.Maps)
-                    if (e.Src != 0 && e.Dst != 0 && e.Src != e.Dst) m[e.Src] = e.Dst;
+                    if (e.Src != 0 && e.Dst != 0 && e.Src != e.Dst)
+                    {
+                        m[e.Src] = e.Dst;
+                        if (Array.IndexOf(ItemSlotVk, e.Dst) >= 0) item.Add(e.Src);
+                        else item.Remove(e.Src);
+                    }
                 if (Cfg.ChatEnabled && Cfg.Chats != null)
                     foreach (ChatItem c in Cfg.Chats)
                         if (c.Key != 0 && !string.IsNullOrEmpty(c.Text))
                             cm[ChatKey(c.Mods, c.Key)] = c.Text;
             }
             _map = m;
+            _itemSrc = item;
             _chatMap = cm;
         }
 
+        // 查询当前生效的映射（诊断/测试用）
+        public static bool TryGetMapping(int src, out int dst)
+        {
+            return _map.TryGetValue(src, out dst);
+        }
+
+        public static bool IsItemSlotSource(int src) { return _itemSrc.Contains(src); }
+
+        public static bool TryGetChat(int mods, int vk, out string text)
+        {
+            return _chatMap.TryGetValue(ChatKey(mods, vk), out text);
+        }
+
+        // 判断一个字符会走"真实按键"路径还是 Unicode 注入路径（诊断/测试用）
+        public static bool CanTypeAsRealKey(char ch)
+        {
+            if (ch >= 128) return false;
+            short vs = Native.VkKeyScan(ch);
+            if (vs == -1) return false;
+            int vk = vs & 0xFF;
+            int state = (vs >> 8) & 0xFF;
+            return vk != 0 && (state & 2) == 0 && (state & 4) == 0;
+        }
+
+        // ---- 前台判定：按窗口句柄记忆，命中时只是一次指针比较 ----
+        static IntPtr _fgMemoHwnd = new IntPtr(-1);
+        static bool _fgMemoResult;
+
         public static bool War3Foreground()
         {
-            uint now = (uint)Environment.TickCount;
-            if (now - _fgCheckedAt < 250) return _fgCached;
-            _fgCheckedAt = now;
-            _fgCached = War3Ctl.IsWar3Window(Native.GetForegroundWindow());
-            return _fgCached;
+            IntPtr fg = Native.GetForegroundWindow();
+            if (fg == _fgMemoHwnd) return _fgMemoResult;
+            _fgMemoHwnd = fg;
+            _fgMemoResult = War3Ctl.IsWar3WindowFast(fg);
+            return _fgMemoResult;
+        }
+
+        // 前台窗口没变但归属可能变了(如魔兽刚启动)，由UI定时器调用使记忆失效
+        public static void InvalidateForegroundMemo()
+        {
+            _fgMemoHwnd = new IntPtr(-1);
         }
 
         // ---- 物理修饰键状态(不受合成按键影响) ----
@@ -114,8 +201,7 @@ namespace WshHelper
 
         static bool IsModifierVk(int vk)
         {
-            return vk == 0x10 || vk == 0x11 || vk == 0x12
-                || (vk >= 0xA0 && vk <= 0xA5);
+            return vk == 0x10 || vk == 0x11 || vk == 0x12 || (vk >= 0xA0 && vk <= 0xA5);
         }
 
         static void CountApm()
@@ -139,8 +225,6 @@ namespace WshHelper
         }
 
         // ---- 血条/蓝条常显：持续保持Alt按下 ----
-        // 玩家真正操作(按键/点击)时先松开Alt，避免产生 Alt+点击(信号) / Alt+键 组合，
-        // 停手约0.35秒后重新按住，血条随即恢复显示。
         public static bool BarsActive { get { return _synthAlt; } }
 
         static void PressSynthAlt()
@@ -163,32 +247,34 @@ namespace WshHelper
             ReleaseSynthAlt();
         }
 
-        // 由主界面定时器调用
         public static void TickBars()
         {
             if (Cfg == null) return;
-            bool want = Cfg.ShowHpBars && !_sendingChat && War3Foreground()
+            bool fg = War3Foreground();
+            bool want = Cfg.ShowHpBars && !_sendingChat && fg
                         && !PhysAlt && !PhysCtrl && !PhysShift
                         && (uint)Environment.TickCount >= _altResumeAt;
             if (want) PressSynthAlt();
-            else if (!Cfg.ShowHpBars || !War3Foreground()) ReleaseSynthAlt();
+            else if (!Cfg.ShowHpBars || !fg) ReleaseSynthAlt();
         }
 
+        // ================= 键盘钩子 =================
         static IntPtr KbProc(int nCode, IntPtr wParam, IntPtr lParam)
         {
             if (nCode < 0) return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
-            Native.KBDLLHOOKSTRUCT k = (Native.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Native.KBDLLHOOKSTRUCT));
-            if (k.dwExtraInfo == Native.InjectMagic)
+            _kbTicks++;
+
+            if (Native.ReadExtraInfo(lParam, Native.KbdExtraInfoOffset) == Native.InjectMagic)
                 return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
 
             int msg = wParam.ToInt32();
             bool down = (msg == Native.WM_KEYDOWN || msg == Native.WM_SYSKEYDOWN);
             bool up = (msg == Native.WM_KEYUP || msg == Native.WM_SYSKEYUP);
-            int vk = (int)k.vkCode;
+            int vk = Native.ReadInt(lParam, Native.KbdVkCodeOffset);
 
             // 物理按键状态始终跟踪(即使不在游戏中)，供修饰键判断使用
             bool repeat = false;
-            if (vk < 256)
+            if (vk >= 0 && vk < 256)
             {
                 if (down) { repeat = _phyDown[vk]; _phyDown[vk] = true; }
                 else if (up) _phyDown[vk] = false;
@@ -203,11 +289,9 @@ namespace WshHelper
                 return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
             }
 
-            // 玩家有真实按键动作 -> 暂时收起合成Alt
             if (down && _synthAlt) SuspendBars();
             else if (down) _altResumeAt = (uint)Environment.TickCount + 350;
 
-            // APM统计（去掉长按自动重复）
             if (down && !repeat) CountApm();
 
             int mods = PhysMods;
@@ -230,7 +314,6 @@ namespace WshHelper
                 }
             }
 
-            // 屏蔽Win键
             if (Cfg.BlockWinKey && (vk == 0x5B || vk == 0x5C))
                 return new IntPtr(1);
 
@@ -260,7 +343,7 @@ namespace WshHelper
                 {
                     if (!Cfg.ApplyToCombo && mods != 0)
                         return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
-                    SendVk(dst, down);
+                    EmitMapped(vk, dst, down, repeat);
                     return new IntPtr(1);
                 }
             }
@@ -268,15 +351,34 @@ namespace WshHelper
             return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
         }
 
+        // 发出改键结果。物品栏键可选先按F1选中英雄，这样在商店/小兵被选中时
+        // 也不会误买东西 —— 按下去永远作用在自己英雄身上。
+        static void EmitMapped(int src, int dst, bool down, bool repeat)
+        {
+            if (down && !repeat && Cfg.ItemKeySelectHeroFirst && _itemSrc.Contains(src))
+            {
+                SendVk(VK_F1, true);
+                SendVk(VK_F1, false);
+            }
+            SendVk(dst, down);
+        }
+
+        // ================= 鼠标钩子 =================
         static IntPtr MsProc(int nCode, IntPtr wParam, IntPtr lParam)
         {
             if (nCode < 0) return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
-            Native.MSLLHOOKSTRUCT m = (Native.MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Native.MSLLHOOKSTRUCT));
-            if (m.dwExtraInfo == Native.InjectMagic)
-                return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
 
             int msg = wParam.ToInt32();
-            if (_sendingChat || Cfg == null || msg == Native.WM_MOUSEMOVE || !War3Foreground())
+            _msTicks++;
+
+            // 热路径：鼠标移动在读取任何字段之前就返回
+            if (msg == Native.WM_MOUSEMOVE)
+                return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
+
+            if (Native.ReadExtraInfo(lParam, Native.MouseExtraInfoOffset) == Native.InjectMagic)
+                return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
+
+            if (_sendingChat || Cfg == null || !War3Foreground())
                 return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
 
             bool anyDown = (msg == Native.WM_LBUTTONDOWN || msg == Native.WM_RBUTTONDOWN ||
@@ -302,14 +404,17 @@ namespace WshHelper
                 case Native.WM_XBUTTONDOWN:
                 case Native.WM_XBUTTONUP:
                     {
-                        int which = (int)(m.mouseData >> 16) & 0xFFFF;
+                        int data = Native.ReadInt(lParam, Native.MouseDataOffset);
+                        int which = (data >> 16) & 0xFFFF;
                         src = (which == 1) ? Native.VK_XBUTTON1 : Native.VK_XBUTTON2;
                         down = (msg == Native.WM_XBUTTONDOWN);
                         break;
                     }
                 case Native.WM_MOUSEWHEEL:
                     {
-                        short delta = (short)((m.mouseData >> 16) & 0xFFFF);
+                        int data = Native.ReadInt(lParam, Native.MouseDataOffset);
+                        short delta = (short)((data >> 16) & 0xFFFF);
+                        if (delta == 0) break;
                         src = delta > 0 ? Native.VK_WHEELUP : Native.VK_WHEELDOWN;
                         wheel = true;
                         break;
@@ -322,15 +427,19 @@ namespace WshHelper
                 {
                     if (!Cfg.ApplyToCombo && PhysMods != 0)
                         return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
-                    if (wheel) { SendVk(dst, true); SendVk(dst, false); }
-                    else SendVk(dst, down);
+                    if (wheel)
+                    {
+                        EmitMapped(src, dst, true, false);
+                        SendVk(dst, false);
+                    }
+                    else EmitMapped(src, dst, down, false);
                     return new IntPtr(1);
                 }
             }
             return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
         }
 
-        // 发送一个按键(支持鼠标伪键码)
+        // ================= 输入合成 =================
         public static void SendVk(int vk, bool down)
         {
             Native.INPUT[] inp = new Native.INPUT[1];
@@ -389,29 +498,75 @@ namespace WshHelper
             Native.SendInput(2, inp, Marshal.SizeOf(typeof(Native.INPUT)));
         }
 
+        // 逐字输入。ASCII 走真实的虚拟键+扫描码(和真人敲键盘一样)，
+        // 因为魔兽这类游戏未必接受 KEYEVENTF_UNICODE 合成的 VK_PACKET；
+        // 非ASCII(中文)只能退回 Unicode 方式。
+        static void TypeChar(char ch)
+        {
+            if (ch < 128)
+            {
+                short vs = Native.VkKeyScan(ch);
+                if (vs != -1)
+                {
+                    int vk = vs & 0xFF;
+                    int state = (vs >> 8) & 0xFF;
+                    bool shift = (state & 1) != 0;
+                    bool ctrl = (state & 2) != 0;
+                    bool alt = (state & 4) != 0;
+                    if (vk != 0 && !ctrl && !alt)
+                    {
+                        if (shift) SendVk(0xA0, true);
+                        SendVk(vk, true);
+                        SendVk(vk, false);
+                        if (shift) SendVk(0xA0, false);
+                        return;
+                    }
+                }
+            }
+            SendUnicodeChar(ch);
+        }
+
+        static readonly int[] AllModVks = new int[] { 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x10, 0x11, 0x12 };
+
+        // 强制释放所有修饰键。必须做：喊话热键是 Alt+数字，
+        // 如果 Alt 还按着就发回车，魔兽会把 Alt+Enter 当成切换全屏/窗口。
+        static void ForceReleaseModifiers()
+        {
+            foreach (int vk in AllModVks)
+                if ((Native.GetAsyncKeyState(vk) & 0x8000) != 0)
+                    SendVk(vk, false);
+        }
+
         // 游戏内发送聊天: 回车 -> 逐字输入 -> 回车
         public static void SendChatAsync(string text)
         {
             if (_sendingChat) return;
             _sendingChat = true;
             ReleaseSynthAlt();
-            _altResumeAt = (uint)Environment.TickCount + 2000;
+            _altResumeAt = (uint)Environment.TickCount + 3000;
+
+            int enterDelay = Cfg != null ? Cfg.ChatEnterDelay : 150;
+            int charDelay = Cfg != null ? Cfg.ChatCharDelay : 12;
+
             ThreadPool.QueueUserWorkItem(delegate(object o)
             {
                 try
                 {
-                    // 等玩家松开触发喊话的修饰键，避免 Ctrl/Alt 影响输入
-                    for (int i = 0; i < 40 && PhysMods != 0; i++) Thread.Sleep(25);
-                    TapVk(0x0D);
-                    Thread.Sleep(120);
+                    // 等玩家松开触发键，最多等 600ms
+                    for (int i = 0; i < 24 && PhysMods != 0; i++) Thread.Sleep(25);
+                    ForceReleaseModifiers();
+                    Thread.Sleep(30);
+
+                    TapVk(0x0D);                       // 打开聊天栏
+                    Thread.Sleep(enterDelay);
                     foreach (char ch in text)
                     {
-                        SendUnicodeChar(ch);
-                        Thread.Sleep(3);
+                        TypeChar(ch);
+                        Thread.Sleep(charDelay);
                     }
+                    Thread.Sleep(enterDelay / 2);
+                    TapVk(0x0D);                       // 发送
                     Thread.Sleep(60);
-                    TapVk(0x0D);
-                    Thread.Sleep(80);
                 }
                 catch { }
                 finally { _sendingChat = false; }

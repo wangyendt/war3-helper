@@ -11,9 +11,9 @@ $refs = @("/r:System.dll", "/r:System.Drawing.dll", "/r:System.Windows.Forms.dll
           "/r:Microsoft.VisualBasic.dll")
 
 $srcs = @(Get-ChildItem (Join-Path $root "src") -Filter *.cs | ForEach-Object { $_.FullName })
-$srcs += (Join-Path $root "tools\TestVersionSwitch.cs")
-$exe = Join-Path $obj "TestVersionSwitch.exe"
-$args = @("/nologo", "/target:exe", "/main:TestVersionSwitch", ("/out:" + $exe)) + $refs + $srcs
+$srcs += @(Get-ChildItem (Join-Path $root "tools") -Filter Test*.cs | ForEach-Object { $_.FullName })
+$exe = Join-Path $obj "Tests.exe"
+$args = @("/nologo", "/target:exe", "/main:TestMain", ("/out:" + $exe)) + $refs + $srcs
 & $csc $args
 if ($LASTEXITCODE -ne 0) { throw "test build failed" }
 & $exe
