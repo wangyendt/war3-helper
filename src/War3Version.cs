@@ -233,11 +233,20 @@ namespace WshHelper
         }
 
         // 切换到目标版本。返回null表示成功，否则返回错误信息。
+        // 游戏运行时拒绝操作 —— 覆盖正在使用的 War3.exe/Game.dll 会损坏安装。
         public static string SwitchTo(string war3Dir, VersionPackage target, string currentLabel,
                                       List<VersionPackage> allPackages, Progress prog)
         {
             if (War3Running())
                 return "魔兽正在运行，请先完全退出游戏再切换版本。";
+            return ApplySwitch(war3Dir, target, currentLabel, allPackages, prog);
+        }
+
+        // 纯文件操作部分，不含"游戏是否在运行"的前置检查，便于沙箱测试。
+        // 生产代码请走 SwitchTo。
+        public static string ApplySwitch(string war3Dir, VersionPackage target, string currentLabel,
+                                         List<VersionPackage> allPackages, Progress prog)
+        {
             if (!Directory.Exists(war3Dir))
                 return "魔兽目录不存在: " + war3Dir;
             if (!File.Exists(target.ZipPath))

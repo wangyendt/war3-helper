@@ -7,6 +7,7 @@ using WshHelper;
 
 // 沙箱测试：在临时目录里模拟一个魔兽安装 + 两个版本包，验证切换/切回不会丢文件。
 // 用 build-test.ps1 编译运行，不会碰真实游戏目录。
+// 测的是 ApplySwitch(纯文件逻辑)，不走 SwitchTo，这样结果不受"此刻有没有开着魔兽"影响。
 static class TestVersionSwitch
 {
     static int failures = 0;
@@ -90,7 +91,7 @@ static class TestVersionSwitch
 
         // --- 2) 切到 1.27b ---
         Console.WriteLine("\n[2] switch 1.24e -> 1.27b");
-        string err = War3Version.SwitchTo(war3, v127, label124, pkgs, prog);
+        string err = War3Version.ApplySwitch(war3, v127, label124, pkgs, prog);
         Check(err == null, "switch returned no error" + (err != null ? " (" + err + ")" : ""));
         Check(Read(Path.Combine(war3, "War3.exe")) == "EXE-127b", "War3.exe is 1.27b");
         Check(Read(Path.Combine(war3, "Game.dll")) == "GAME-127b", "Game.dll is 1.27b");
@@ -106,7 +107,7 @@ static class TestVersionSwitch
         v127 = pkgs.Find(delegate(VersionPackage x) { return x.Name == "1.27b"; });
         Check(v127 != null && v127.Installed, "1.27b now identified as installed");
         string label127 = War3Version.CurrentLabel(war3, pkgs);
-        err = War3Version.SwitchTo(war3, v124, label127, pkgs, prog);
+        err = War3Version.ApplySwitch(war3, v124, label127, pkgs, prog);
         Check(err == null, "switch back returned no error" + (err != null ? " (" + err + ")" : ""));
         Check(Read(Path.Combine(war3, "War3.exe")) == "EXE-124e", "War3.exe restored to 1.24e");
         Check(Read(Path.Combine(war3, "Game.dll")) == "GAME-124e", "Game.dll restored to 1.24e");
@@ -123,10 +124,25 @@ static class TestVersionSwitch
         Console.WriteLine("\n[4] switch again 1.24e -> 1.27b (round trip x2)");
         pkgs = War3Version.Scan(ver, war3);
         v127 = pkgs.Find(delegate(VersionPackage x) { return x.Name == "1.27b"; });
-        err = War3Version.SwitchTo(war3, v127, War3Version.CurrentLabel(war3, pkgs), pkgs, prog);
+        err = War3Version.ApplySwitch(war3, v127, War3Version.CurrentLabel(war3, pkgs), pkgs, prog);
         Check(err == null, "second switch returned no error" + (err != null ? " (" + err + ")" : ""));
         Check(Read(Path.Combine(war3, "War3.exe")) == "EXE-127b", "War3.exe is 1.27b again");
         Check(Read(Path.Combine(war3, "war3patch.mpq")) == "PATCH-127b", "war3patch.mpq is 1.27b again");
+
+        // --- 5) 安全守卫：魔兽运行时 SwitchTo 必须拒绝(只在确实开着游戏时才能验证) ---
+        Console.WriteLine("\n[5] guard");
+        if (War3Version.War3Running())
+        {
+            pkgs = War3Version.Scan(ver, war3);
+            v124 = pkgs.Find(delegate(VersionPackage x) { return x.Name == "1.24e"; });
+            string guard = War3Version.SwitchTo(war3, v124, War3Version.CurrentLabel(war3, pkgs), pkgs, prog);
+            Check(guard != null && guard.Contains("正在运行"), "SwitchTo refuses while war3 is running");
+            Check(Read(Path.Combine(war3, "War3.exe")) == "EXE-127b", "files untouched after refusal");
+        }
+        else
+        {
+            Console.WriteLine("  SKIP  war3 not running, cannot exercise the guard");
+        }
 
         Console.WriteLine("\n" + (failures == 0 ? "ALL TESTS PASSED" : failures + " TEST(S) FAILED"));
         try { Directory.Delete(root, true); }
