@@ -39,6 +39,7 @@ namespace WshHelper
 
         static Dictionary<int, int> _map = new Dictionary<int, int>();
         static HashSet<int> _itemSrc = new HashSet<int>();      // 映射到物品栏的源键
+        static HashSet<int> _shopKeep = new HashSet<int>();     // 商店模式下仍生效的源键
         static Dictionary<int, string> _chatMap = new Dictionary<int, string>();
         static readonly HashSet<int> _swallowedUp = new HashSet<int>();
         static readonly bool[] _phyDown = new bool[256];
@@ -137,18 +138,25 @@ namespace WshHelper
         {
             Dictionary<int, int> m = new Dictionary<int, int>();
             HashSet<int> item = new HashSet<int>();
+            HashSet<int> keep = new HashSet<int>();
             Dictionary<int, string> cm = new Dictionary<int, string>();
             if (Cfg != null)
             {
                 Scheme s = Cfg.ActiveScheme;
                 for (int i = 0; i < 6; i++)
-                    if (s.ItemKeys[i] != 0) { m[s.ItemKeys[i]] = ItemSlotVk[i]; item.Add(s.ItemKeys[i]); }
+                    if (s.ItemKeys[i] != 0)
+                    {
+                        m[s.ItemKeys[i]] = ItemSlotVk[i];
+                        item.Add(s.ItemKeys[i]);
+                        if (s.ItemKeysKeepInShop) keep.Add(s.ItemKeys[i]);
+                    }
                 foreach (KeyMapEntry e in s.Maps)
                     if (e.Src != 0 && e.Dst != 0 && e.Src != e.Dst)
                     {
                         m[e.Src] = e.Dst;
                         if (Array.IndexOf(ItemSlotVk, e.Dst) >= 0) item.Add(e.Src);
                         else item.Remove(e.Src);
+                        if (e.KeepInShop) keep.Add(e.Src); else keep.Remove(e.Src);
                     }
                 if (Cfg.ChatEnabled && Cfg.Chats != null)
                     foreach (ChatItem c in Cfg.Chats)
@@ -157,6 +165,7 @@ namespace WshHelper
             }
             _map = m;
             _itemSrc = item;
+            _shopKeep = keep;
             _chatMap = cm;
 
             bool numpad = false;
@@ -263,11 +272,29 @@ namespace WshHelper
 
         public static void ExitShopMode() { SetShopMode(false); }
 
-        // 改键当前是否被挂起（按住停用键 或 处于商店模式）
-        public static bool RemapSuspended
+        // 仅供测试使用
+        public static void EnterShopModeForTest() { SetShopMode(true); }
+
+        // 商店模式下，这个源键的改键是否仍然生效
+        static bool ShopExempt(int src)
         {
-            get { return SuspendHeld || _shopMode; }
+            if (Cfg == null) return false;
+            // 触发键必须永远生效！否则用滚轮进入商店模式后，滚轮自己的改键也被挂起，
+            // 第二次滚轮就直接落到游戏里变成视角缩放了。
+            if (Cfg.ShopEnterOnWheel && (src == Native.VK_WHEELUP || src == Native.VK_WHEELDOWN)) return true;
+            if (Cfg.ShopEnterKey != 0 && src == Cfg.ShopEnterKey) return true;
+            if (Cfg.ShopExitKey != 0 && src == Cfg.ShopExitKey) return true;
+            return _shopKeep.Contains(src);   // 用户逐条勾了"商店模式下仍生效"
         }
+
+        // 这个源键的改键当前是否被挂起
+        static bool SuspendedFor(int src)
+        {
+            if (SuspendHeld) return true;                 // 按住停用键 = 全部挂起
+            return _shopMode && !ShopExempt(src);
+        }
+
+        public static bool IsSuspendedFor(int src) { return SuspendedFor(src); }
 
         static void CountApm()
         {
@@ -394,9 +421,8 @@ namespace WshHelper
                 else if (Cfg.ShopEnterKey != 0 && vk == Cfg.ShopEnterKey) SetShopMode(true);
             }
 
-            // 挂起时所有改键和喊话热键原样放行。
-            // 用途：在商店里让 S 还是 S（改键会把 S 变成别的键，导致买不了树枝）。
-            if (RemapSuspended)
+            // 按住"临时停用"键时连喊话热键一起放行
+            if (SuspendHeld)
                 return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
 
             if (down && _synthAlt) SuspendBars();
@@ -453,6 +479,8 @@ namespace WshHelper
                 {
                     if (!Cfg.ApplyToCombo && mods != 0)
                         return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
+                    if (SuspendedFor(vk))       // 商店模式下这条被挂起 -> 原样放行
+                        return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
                     EmitMapped(vk, dst, down, repeat);
                     return new IntPtr(1);
                 }
@@ -493,13 +521,16 @@ namespace WshHelper
             if (_sendingChat || Cfg == null || !War3Foreground())
                 return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
 
-            // 滚轮进入商店模式：先记下，滚轮自己的改键照常生效，之后的按键才挂起
+            // 滚轮进入商店模式。滚轮自己的改键属于触发键，ShopExempt 会让它一直生效。
             bool wheelEvent = (msg == Native.WM_MOUSEWHEEL);
             bool enterShopAfter = (wheelEvent && Cfg.ShopModeEnabled && Cfg.ShopEnterOnWheel);
+            // 屏蔽滚轮视角缩放：无论有没有改键，都不让原始滚轮事件落到游戏里
+            bool eatWheel = (wheelEvent && Cfg.BlockWheelZoom);
 
-            if (RemapSuspended)
+            if (SuspendHeld)
             {
                 if (enterShopAfter) SetShopMode(true);
+                if (eatWheel) return new IntPtr(1);
                 return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
             }
 
@@ -545,10 +576,10 @@ namespace WshHelper
             if (src != 0)
             {
                 int dst;
-                if (_map.TryGetValue(src, out dst))
+                if (_map.TryGetValue(src, out dst)
+                    && (Cfg.ApplyToCombo || PhysMods == 0)
+                    && !SuspendedFor(src))
                 {
-                    if (!Cfg.ApplyToCombo && PhysMods != 0)
-                        return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
                     if (wheel)
                     {
                         uint r = SendVk(dst, true);
@@ -566,6 +597,7 @@ namespace WshHelper
                 if (Diag.Enabled) Diag.Log(1, src, 0, down, true, false, 0);
             }
             if (enterShopAfter) SetShopMode(true);
+            if (eatWheel) return new IntPtr(1);
             return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
         }
 

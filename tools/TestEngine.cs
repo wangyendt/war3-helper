@@ -77,6 +77,36 @@ static class EngineTests
         Engine.Rebuild();
         Check(Engine.MapsToNumpad, "flag follows the active scheme");
 
+        // --- 2c) 商店模式：触发键必须豁免，否则滚轮进商店后自己就被挂起了 ---
+        Console.WriteLine("\n[2c] shop mode exemptions");
+        cfg.ShopModeEnabled = true;
+        cfg.ShopEnterOnWheel = true;
+        cfg.ShopExitKey = 0x70;
+        Engine.Rebuild();
+        Engine.ExitShopMode();
+        Check(!Engine.IsSuspendedFor((int)'S'), "not suspended before entering shop mode");
+        Engine.EnterShopModeForTest();
+        Check(Engine.IsSuspendedFor((int)'S'), "S is suspended in shop mode");
+        Check(!Engine.IsSuspendedFor(Native.VK_WHEELUP), "wheel up stays active (it is the trigger)");
+        Check(!Engine.IsSuspendedFor(Native.VK_WHEELDOWN), "wheel down stays active (it is the trigger)");
+        Check(Engine.IsSuspendedFor(Native.VK_XBUTTON2), "item-slot side button is suspended in shop mode");
+        Engine.ExitShopMode();
+        Check(!Engine.IsSuspendedFor((int)'S'), "S active again after leaving shop mode");
+
+        // 逐条勾"商店模式下仍生效"
+        s.Maps[0].KeepInShop = true;      // 侧键1 -> O
+        s.ItemKeysKeepInShop = true;
+        Engine.Rebuild();
+        Engine.EnterShopModeForTest();
+        Check(!Engine.IsSuspendedFor(Native.VK_XBUTTON1), "per-entry KeepInShop keeps that mapping active");
+        Check(!Engine.IsSuspendedFor(Native.VK_XBUTTON2), "ItemKeysKeepInShop keeps item slots active");
+        Check(Engine.IsSuspendedFor((int)'S'), "unflagged mapping is still suspended");
+        Engine.ExitShopMode();
+        s.Maps[0].KeepInShop = false;
+        s.ItemKeysKeepInShop = false;
+        cfg.ShopModeEnabled = false;
+        Engine.Rebuild();
+
         // --- 3) 滚轮方向解码：mouseData 高16位是有符号short ---
         Console.WriteLine("\n[3] wheel delta decoding");
         Check(DecodeWheel(0x00780000) > 0, "mouseData 0x00780000 (+120) decodes as wheel UP");

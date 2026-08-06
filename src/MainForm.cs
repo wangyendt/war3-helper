@@ -99,7 +99,7 @@ namespace WshHelper
         CaptureBox[] capItems = new CaptureBox[6];
         ListView lvMaps;
         CaptureBox capSrc, capDst, capSuspend, capShopEnter, capShopExit;
-        CheckBox chkAutoNumLock, chkShopMode, chkShopWheel;
+        CheckBox chkAutoNumLock, chkShopMode, chkShopWheel, chkBlockWheel, chkItemKeepShop;
         Label lblNumLock;
         ComboBox cmbSchemes, cmbInject;
         CheckBox chkDiag;
@@ -444,7 +444,7 @@ namespace WshHelper
 
             GroupBox gShop = new GroupBox();
             gShop.Text = "商店模式 (进商店时挂起全部改键)";
-            gShop.Bounds = new Rectangle(12, 246, 330, 126);
+            gShop.Bounds = new Rectangle(12, 246, 330, 130);
             tp.Controls.Add(gShop);
 
             chkShopMode = new CheckBox();
@@ -458,6 +458,28 @@ namespace WshHelper
                 cfg.Save();
             };
             gShop.Controls.Add(chkShopMode);
+
+            chkBlockWheel = new CheckBox();
+            chkBlockWheel.Text = "屏蔽滚轮调整视角";
+            chkBlockWheel.Bounds = new Rectangle(14, 100, 180, 22);
+            chkBlockWheel.CheckedChanged += delegate
+            {
+                if (loading) return;
+                cfg.BlockWheelZoom = chkBlockWheel.Checked;
+                cfg.Save();
+            };
+            gShop.Controls.Add(chkBlockWheel);
+
+            chkItemKeepShop = new CheckBox();
+            chkItemKeepShop.Text = "物品栏键仍生效";
+            chkItemKeepShop.Bounds = new Rectangle(200, 100, 130, 22);
+            chkItemKeepShop.CheckedChanged += delegate
+            {
+                if (loading) return;
+                cfg.ActiveScheme.ItemKeysKeepInShop = chkItemKeepShop.Checked;
+                SaveRebuild();
+            };
+            gShop.Controls.Add(chkItemKeepShop);
 
             chkShopWheel = new CheckBox();
             chkShopWheel.Text = "滚轮上/下 进入";
@@ -574,10 +596,29 @@ namespace WshHelper
             lvMaps.View = View.Details;
             lvMaps.FullRowSelect = true;
             lvMaps.HideSelection = false;
-            lvMaps.Bounds = new Rectangle(12, 24, 326, 310);
-            lvMaps.Columns.Add("按下", 150);
-            lvMaps.Columns.Add("实际生效", 150);
+            lvMaps.CheckBoxes = true;
+            lvMaps.Bounds = new Rectangle(12, 24, 326, 286);
+            lvMaps.Columns.Add("按下", 130);
+            lvMaps.Columns.Add("实际生效", 120);
+            lvMaps.Columns.Add("商店", 60);
+            lvMaps.ItemChecked += delegate(object s, ItemCheckedEventArgs e)
+            {
+                if (loading) return;
+                int i = e.Item.Index;
+                if (i >= 0 && i < cfg.ActiveScheme.Maps.Count)
+                {
+                    cfg.ActiveScheme.Maps[i].KeepInShop = e.Item.Checked;
+                    e.Item.SubItems[2].Text = e.Item.Checked ? "仍生效" : "挂起";
+                    SaveRebuild();
+                }
+            };
             gMaps.Controls.Add(lvMaps);
+
+            Label lmk = new Label();
+            lmk.Text = "勾选 = 商店模式下这条改键仍然生效（触发键自动豁免）";
+            lmk.Bounds = new Rectangle(12, 312, 326, 20);
+            lmk.ForeColor = Color.DimGray;
+            gMaps.Controls.Add(lmk);
 
             capSrc = new CaptureBox();
             capSrc.Bounds = new Rectangle(12, 344, 110, 24);
@@ -1659,6 +1700,8 @@ namespace WshHelper
             chkShopWheel.Checked = cfg.ShopEnterOnWheel;
             capShopEnter.Vk = cfg.ShopEnterKey;
             capShopExit.Vk = cfg.ShopExitKey;
+            chkBlockWheel.Checked = cfg.BlockWheelZoom;
+            chkItemKeepShop.Checked = cfg.ActiveScheme.ItemKeysKeepInShop;
             cmbInject.SelectedIndex = cfg.InjectMode;
             chkDiag.Checked = Diag.Enabled;
             numEnterDelay.Value = Math.Max(30, Math.Min(2000, cfg.ChatEnterDelay));
@@ -1696,19 +1739,24 @@ namespace WshHelper
         {
             bool old = loading; loading = true;
             for (int i = 0; i < 6; i++) capItems[i].Vk = cfg.ActiveScheme.ItemKeys[i];
+            if (chkItemKeepShop != null) chkItemKeepShop.Checked = cfg.ActiveScheme.ItemKeysKeepInShop;
             loading = old;
             ReloadMaps();
         }
 
         void ReloadMaps()
         {
+            bool old = loading; loading = true;
             lvMaps.Items.Clear();
             foreach (KeyMapEntry e in cfg.ActiveScheme.Maps)
             {
                 ListViewItem it = new ListViewItem(KeyNames.Name(e.Src));
                 it.SubItems.Add(KeyNames.Name(e.Dst));
+                it.SubItems.Add(e.KeepInShop ? "仍生效" : "挂起");
+                it.Checked = e.KeepInShop;
                 lvMaps.Items.Add(it);
             }
+            loading = old;
         }
 
         void ReloadChats()
