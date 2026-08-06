@@ -305,7 +305,9 @@ namespace WshHelper
         public void Sync()
         {
             if (Cfg == null || !IsHandleCreated) return;
-            bool want = Cfg.InGameIcon && !War3Ctl.BossHidden && War3Ctl.MainWindow() != IntPtr.Zero;
+            // 用缓存版本：本方法由UI定时器调用，而钩子回调也在同一线程上，
+            // 这里不能做进程枚举那种耗时操作
+            bool want = Cfg.InGameIcon && !War3Ctl.BossHidden && War3Ctl.CachedMainWindow() != IntPtr.Zero;
             if (want && !Visible)
             {
                 Show();

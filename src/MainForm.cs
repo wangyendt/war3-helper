@@ -98,8 +98,9 @@ namespace WshHelper
         CheckBox chkRemap, chkCombo, chkWin, chkHeroFirst;
         CaptureBox[] capItems = new CaptureBox[6];
         ListView lvMaps;
-        CaptureBox capSrc, capDst;
-        ComboBox cmbSchemes;
+        CaptureBox capSrc, capDst, capSuspend;
+        ComboBox cmbSchemes, cmbInject;
+        CheckBox chkDiag;
         // 喊话页
         CheckBox chkChat;
         ListView lvChats;
@@ -189,6 +190,7 @@ namespace WshHelper
             SetupTray();
             RegisterBoss();
             War3Ctl.SetAlwaysHealthBars(cfg.AlwaysHealthBars);
+            War3Ctl.StartWindowCacheRefresher();   // 进程枚举放后台，别堵住UI线程上的钩子回调
 
             timerMain = new System.Windows.Forms.Timer();
             timerMain.Interval = 300;
@@ -300,25 +302,23 @@ namespace WshHelper
         // ================= 主循环 =================
         int tickCount = 0;
 
+        // 注意：低层钩子回调跑在本线程(UI线程)上，这里做的任何耗时操作都会把钩子回调堵住，
+        // 超过 LowLevelHooksTimeout(300ms) 钩子就会被系统摘掉。所以这里只能做廉价的事，
+        // 进程枚举一律交给 War3Ctl 的后台刷新线程。
         void OnMainTick(object s, EventArgs e)
         {
             tickCount++;
-            // 每约1秒刷新一次"魔兽窗口"缓存，并让钩子里的前台记忆失效
-            if (tickCount % 3 == 0)
-            {
-                War3Ctl.RefreshWar3WindowCache();
-                Engine.InvalidateForegroundMemo();
-            }
+            if (tickCount % 3 == 0) Engine.InvalidateForegroundMemo();
             Engine.WatchdogTick();      // 钩子被系统摘掉时自动重装
             War3Ctl.MaintainClip(cfg.AutoLockMouse);
             Engine.TickBars();
             if (iconForm != null) iconForm.Sync();
-            bool found = War3Ctl.MainWindow() != IntPtr.Zero;
+            bool found = War3Ctl.CachedMainWindow() != IntPtr.Zero;
             string bars = cfg.ShowHpBars ? (Engine.BarsActive ? "开(生效中)" : "开(待机)") : "关";
             string hook = Engine.ReinstallCount > 0 ? "  钩子已自动重装" + Engine.ReinstallCount + "次" : "";
             lblStatus.Text = string.Format("魔兽: {0}    改键: {1}    方案: {2}    血条常显: {3}    老板键: {4}{5}",
                 found ? (Engine.War3Foreground() ? "游戏中" : "已找到") : "未运行",
-                cfg.RemapEnabled ? "开" : "关",
+                Engine.SuspendHeld ? "已临时停用" : (cfg.RemapEnabled ? "开" : "关"),
                 cfg.ActiveScheme.Name,
                 bars,
                 KeyNames.Name(cfg.BossKey),
@@ -410,16 +410,31 @@ namespace WshHelper
             };
             tp.Controls.Add(chkHeroFirst);
 
+            Label lsus = new Label();
+            lsus.Text = "按住此键临时停用改键:";
+            lsus.Bounds = new Rectangle(14, 202, 150, 20);
+            tp.Controls.Add(lsus);
+            capSuspend = new CaptureBox();
+            capSuspend.Bounds = new Rectangle(166, 198, 100, 24);
+            capSuspend.VkChanged += delegate
+            {
+                if (loading) return;
+                cfg.SuspendKey = capSuspend.Vk;
+                cfg.Save();
+            };
+            tp.Controls.Add(capSuspend);
+
             Label hint = new Label();
-            hint.Text = "打开后按物品键会先按一下F1，这样选中商店或小兵时也不会误买东西。\r\n" +
-                        "点击输入框后按键即可设置（支持鼠标侧键/中键/滚轮），双击清除。";
-            hint.Bounds = new Rectangle(14, 198, 336, 40);
+            hint.Text = "· 勾选后按物品键会先按F1，避免在商店误买。\r\n" +
+                        "· 按住停用键时改键全部放行，S 就还是 S。\r\n" +
+                        "· 点击输入框后按键设置，双击清除。";
+            hint.Bounds = new Rectangle(14, 226, 336, 62);
             hint.ForeColor = Color.DimGray;
             tp.Controls.Add(hint);
 
             GroupBox gScheme = new GroupBox();
             gScheme.Text = "改键方案 (Ctrl+F3 游戏中切换)";
-            gScheme.Bounds = new Rectangle(12, 244, 330, 100);
+            gScheme.Bounds = new Rectangle(12, 290, 330, 100);
             tp.Controls.Add(gScheme);
 
             cmbSchemes = new ComboBox();
@@ -518,11 +533,70 @@ namespace WshHelper
             };
             gMaps.Controls.Add(bDelMap);
 
-            Label hint2 = new Label();
-            hint2.Text = "改键仅在魔兽窗口为前台时生效，不影响其他程序。";
-            hint2.Bounds = new Rectangle(14, 350, 330, 40);
-            hint2.ForeColor = Color.DimGray;
-            tp.Controls.Add(hint2);
+            GroupBox gDiag = new GroupBox();
+            gDiag.Text = "改键不生效时用这里排查";
+            gDiag.Bounds = new Rectangle(12, 396, 330, 108);
+            tp.Controls.Add(gDiag);
+
+            Label lim = new Label();
+            lim.Text = "注入方式:";
+            lim.Bounds = new Rectangle(14, 28, 66, 20);
+            gDiag.Controls.Add(lim);
+            cmbInject = new ComboBox();
+            cmbInject.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbInject.Bounds = new Rectangle(82, 24, 230, 24);
+            cmbInject.Items.AddRange(new object[] { "虚拟键 + 扫描码 (默认)", "只发扫描码 (老游戏兼容)" });
+            cmbInject.SelectedIndexChanged += delegate
+            {
+                if (loading) return;
+                cfg.InjectMode = cmbInject.SelectedIndex;
+                cfg.Save();
+            };
+            gDiag.Controls.Add(cmbInject);
+
+            chkDiag = new CheckBox();
+            chkDiag.Text = "记录诊断日志";
+            chkDiag.Bounds = new Rectangle(14, 54, 130, 22);
+            chkDiag.CheckedChanged += delegate
+            {
+                if (loading) return;
+                if (chkDiag.Checked) Diag.Start(); else Diag.Stop();
+            };
+            gDiag.Controls.Add(chkDiag);
+
+            Button bOpenLog = new Button();
+            bOpenLog.Text = "打开日志";
+            bOpenLog.Bounds = new Rectangle(150, 51, 80, 27);
+            bOpenLog.Click += delegate
+            {
+                try
+                {
+                    if (!File.Exists(Diag.LogPath))
+                    {
+                        MessageBox.Show(this, "还没有日志。请先勾选\"记录诊断日志\"，进游戏按几下改键，再回来打开。");
+                        return;
+                    }
+                    System.Diagnostics.Process.Start("notepad.exe", Diag.LogPath);
+                }
+                catch { }
+            };
+            gDiag.Controls.Add(bOpenLog);
+
+            Button bReinstall = new Button();
+            bReinstall.Text = "重装钩子";
+            bReinstall.Bounds = new Rectangle(236, 51, 80, 27);
+            bReinstall.Click += delegate
+            {
+                Engine.Install();
+                MessageBox.Show(this, "键鼠钩子已重新安装。");
+            };
+            gDiag.Controls.Add(bReinstall);
+
+            Label ldh = new Label();
+            ldh.Text = "日志含发出的键和 SendInput 返回值(0=注入失败)";
+            ldh.Bounds = new Rectangle(14, 82, 312, 20);
+            ldh.ForeColor = Color.DimGray;
+            gDiag.Controls.Add(ldh);
         }
 
         void BuildTabChat(TabPage tp)
@@ -1273,10 +1347,21 @@ namespace WshHelper
 "  英文按真实键盘按键逐字敲入(和你自己打字一样)，兼容性最好；\r\n" +
 "  中文只能靠Unicode注入，部分魔兽版本可能收不到。\r\n" +
 "  发不出来时，把喊话页下方的\"发送速度\"两个值调大再试。\r\n\r\n" +
-"【物品键先选英雄】\r\n" +
-"  改键页的这个勾选项打开后，按物品键会先自动按一下F1选中自己英雄，\r\n" +
-"  再按物品栏格子。这样选中商店、小兵、召唤物时按物品键也不会误买/误操作，\r\n" +
-"  物品键永远作用在自己英雄身上。\r\n\r\n" +
+"【在商店里不想改键怎么办】\r\n" +
+"  改键页有两个办法:\r\n" +
+"  1. \"按住此键临时停用改键\": 设一个顺手的键(建议用不常用的键)，在商店里按住它，\r\n" +
+"     所有改键全部原样放行 —— 比如你把S改成了别的键，按住它时S就还是S，能正常买树枝。\r\n" +
+"  2. \"物品键先选中英雄(F1)\": 只影响物品栏6个键，按下时先按一下F1选中英雄，\r\n" +
+"     这样选中商店/小兵时按物品键也不会误买。\r\n" +
+"  说明: 真正去判断\"当前选中的是不是商店\"必须读游戏内存，本工具刻意不做那件事，\r\n" +
+"  所以只能用上面这两种由你自己控制的方式。\r\n\r\n" +
+"【改键不生效时怎么排查】\r\n" +
+"  改键页最下方\"改键不生效时用这里排查\":\r\n" +
+"  · 勾上\"记录诊断日志\"，进游戏按几下改键的键，回来点\"打开日志\"。\r\n" +
+"    日志会写明每次按键有没有被改、发出了什么键、SendInput返回值是多少。\r\n" +
+"    返回值是 0 就说明注入被系统拒绝了(基本都是权限问题，用管理员身份运行助手)。\r\n" +
+"  · \"注入方式\"改成\"只发扫描码\": 有些老游戏用DirectInput读键盘，只认扫描码。\r\n" +
+"  · \"重装钩子\": 手动重新挂接键鼠钩子。\r\n\r\n" +
 "【血条/蓝条常显】\r\n" +
 "  自动替你按住 Alt —— 魔兽按住Alt会显示所有单位血条，DOTA等地图同时显示蓝条。\r\n" +
 "  你一操作就自动松开(不会误发Alt+点击信号)，停手0.3秒后自动按回。\r\n" +
@@ -1483,6 +1568,9 @@ namespace WshHelper
             chkAlwaysBars.Checked = cfg.AlwaysHealthBars;
             chkIcon.Checked = cfg.InGameIcon;
             chkHeroFirst.Checked = cfg.ItemKeySelectHeroFirst;
+            capSuspend.Vk = cfg.SuspendKey;
+            cmbInject.SelectedIndex = cfg.InjectMode;
+            chkDiag.Checked = Diag.Enabled;
             numEnterDelay.Value = Math.Max(30, Math.Min(2000, cfg.ChatEnterDelay));
             numCharDelay.Value = Math.Max(1, Math.Min(200, cfg.ChatCharDelay));
             txtPath.Text = cfg.War3Path;
@@ -1641,6 +1729,7 @@ namespace WshHelper
             }
             cfg.Save();
             Engine.Uninstall();
+            War3Ctl.StopWindowCacheRefresher();
             War3Ctl.ReleaseClip();
             Native.UnregisterHotKey(Handle, HOTKEY_BOSS);
             if (iconForm != null) { iconForm.Hide(); iconForm.Dispose(); }

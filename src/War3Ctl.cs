@@ -69,15 +69,47 @@ namespace WshHelper
             return false;
         }
 
-        // 由UI定时器调用，刷新"属于魔兽进程的窗口"缓存
-        public static void RefreshWar3WindowCache()
+        // 缓存刷新必须放在后台线程！
+        // 低层钩子的回调跑在安装它的线程(=UI线程)上，而刷新会调 Process.GetProcesses()
+        // 枚举系统全部进程(几十~几百毫秒)。放在UI线程上会把钩子回调堵在后面，
+        // 一旦超过 LowLevelHooksTimeout(默认300ms)，Windows 就会把钩子静默摘掉。
+        static System.Threading.Timer _cacheTimer;
+
+        public static void StartWindowCacheRefresher()
         {
-            try
+            StopWindowCacheRefresher();
+            _cacheTimer = new System.Threading.Timer(delegate(object o)
             {
-                List<IntPtr> l = FindWar3Windows();
-                _war3HwndCache = l.ToArray();
-            }
-            catch { }
+                try
+                {
+                    List<IntPtr> l = FindWar3Windows();
+                    _war3HwndCache = l.ToArray();
+                    _cachedMainWindow = l.Count > 0 ? PickVisible(l) : IntPtr.Zero;
+                }
+                catch { }
+            }, null, 0, 1000);
+        }
+
+        public static void StopWindowCacheRefresher()
+        {
+            if (_cacheTimer != null) { _cacheTimer.Dispose(); _cacheTimer = null; }
+        }
+
+        static IntPtr PickVisible(List<IntPtr> l)
+        {
+            foreach (IntPtr h in l)
+                if (Native.IsWindowVisible(h)) return h;
+            return l.Count > 0 ? l[0] : IntPtr.Zero;
+        }
+
+        static IntPtr _cachedMainWindow = IntPtr.Zero;
+
+        // 给UI线程/钩子用的廉价版本，读的是后台线程刷新好的结果
+        public static IntPtr CachedMainWindow()
+        {
+            IntPtr h = _cachedMainWindow;
+            if (h != IntPtr.Zero && !Native.IsWindow(h)) return IntPtr.Zero;
+            return h;
         }
 
         static readonly string[] War3ProcNames = new string[] { "war3", "warcraft iii", "frozen throne", "16_war3" };

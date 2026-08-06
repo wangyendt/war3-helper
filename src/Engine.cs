@@ -81,32 +81,53 @@ namespace WshHelper
         static int _lastMsTicks;
         static uint _suspectSince;
 
+        // 键盘钩子没有"鼠标在动"这种天然信号，所以主动打一个心跳：
+        // 注入一个未定义键(0xFF)的抬起事件，钩子活着就一定会被回调到
+        // (计数在 InjectMagic 判断之前)。下一拍如果计数没变，就说明钩子已经死了。
+        const int HeartbeatVk = 0xFF;
+        static int _kbTicksAtBeat = -1;
+        static bool _beatPending;
+
         public static void WatchdogTick()
         {
+            bool dead = false;
+
+            // --- 鼠标钩子：鼠标在动但回调没被触发 ---
             Native.POINT cur;
-            if (!Native.GetCursorPos(out cur)) return;
-            bool moved = (cur.x != _lastCursor.x || cur.y != _lastCursor.y);
-            _lastCursor = cur;
-
-            if (!moved) { _suspectSince = 0; _lastMsTicks = _msTicks; return; }
-
-            // 鼠标在动，钩子却一次都没被回调 -> 大概率已被系统移除
-            if (_msTicks == _lastMsTicks)
+            if (Native.GetCursorPos(out cur))
             {
-                uint now = (uint)Environment.TickCount;
-                if (_suspectSince == 0) _suspectSince = now;
-                else if (now - _suspectSince > 1500)
+                bool moved = (cur.x != _lastCursor.x || cur.y != _lastCursor.y);
+                _lastCursor = cur;
+                if (moved && _msTicks == _lastMsTicks)
                 {
-                    _reinstalls++;
-                    Install();
-                    _suspectSince = 0;
+                    uint now = (uint)Environment.TickCount;
+                    if (_suspectSince == 0) _suspectSince = now;
+                    else if (now - _suspectSince > 1500) dead = true;
                 }
+                else _suspectSince = 0;
+                _lastMsTicks = _msTicks;
+            }
+
+            // --- 键盘钩子：心跳 ---
+            if (_beatPending)
+            {
+                if (_kbTicks == _kbTicksAtBeat) dead = true;
+                _beatPending = false;
             }
             else
             {
-                _suspectSince = 0;
+                _kbTicksAtBeat = _kbTicks;
+                _beatPending = true;
+                SendVk(HeartbeatVk, false);
             }
-            _lastMsTicks = _msTicks;
+
+            if (dead)
+            {
+                _reinstalls++;
+                Install();
+                _suspectSince = 0;
+                _beatPending = false;
+            }
         }
 
         public static int ChatKey(int mods, int vk) { return (vk & 0xFFFF) | (mods << 16); }
@@ -204,6 +225,18 @@ namespace WshHelper
             return vk == 0x10 || vk == 0x11 || vk == 0x12 || (vk >= 0xA0 && vk <= 0xA5);
         }
 
+        // 是否正按住"临时停用改键"键
+        public static bool SuspendHeld
+        {
+            get
+            {
+                if (Cfg == null) return false;
+                int k = Cfg.SuspendKey;
+                if (k <= 0 || k >= 256) return false;
+                return _phyDown[k];
+            }
+        }
+
         static void CountApm()
         {
             uint now = (uint)Environment.TickCount;
@@ -289,6 +322,11 @@ namespace WshHelper
                 return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
             }
 
+            // 按住"临时停用"键时，所有改键和喊话热键原样放行。
+            // 用途：在商店里让 S 还是 S（改键会把 S 变成别的键，导致买不了树枝）。
+            if (SuspendHeld)
+                return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
+
             if (down && _synthAlt) SuspendBars();
             else if (down) _altResumeAt = (uint)Environment.TickCount + 350;
 
@@ -348,6 +386,7 @@ namespace WshHelper
                 }
             }
 
+            if (down && Diag.Enabled) Diag.Log(0, vk, 0, true, true, false, 0);
             return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
         }
 
@@ -360,7 +399,8 @@ namespace WshHelper
                 SendVk(VK_F1, true);
                 SendVk(VK_F1, false);
             }
-            SendVk(dst, down);
+            uint r = SendVk(dst, down);
+            Diag.Log(0, src, dst, down, true, true, r);
         }
 
         // ================= 鼠标钩子 =================
@@ -378,7 +418,7 @@ namespace WshHelper
             if (Native.ReadExtraInfo(lParam, Native.MouseExtraInfoOffset) == Native.InjectMagic)
                 return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
 
-            if (_sendingChat || Cfg == null || !War3Foreground())
+            if (_sendingChat || Cfg == null || !War3Foreground() || SuspendHeld)
                 return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
 
             bool anyDown = (msg == Native.WM_LBUTTONDOWN || msg == Native.WM_RBUTTONDOWN ||
@@ -429,18 +469,25 @@ namespace WshHelper
                         return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
                     if (wheel)
                     {
-                        EmitMapped(src, dst, true, false);
+                        uint r = SendVk(dst, true);
                         SendVk(dst, false);
+                        Diag.Log(1, src, dst, true, true, true, r);
                     }
-                    else EmitMapped(src, dst, down, false);
+                    else
+                    {
+                        uint r = SendVk(dst, down);
+                        Diag.Log(1, src, dst, down, true, true, r);
+                    }
                     return new IntPtr(1);
                 }
+                if (Diag.Enabled) Diag.Log(1, src, 0, down, true, false, 0);
             }
             return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
         }
 
         // ================= 输入合成 =================
-        public static void SendVk(int vk, bool down)
+        // 返回 SendInput 的结果：0 表示注入被系统拒绝(通常是权限/UIPI问题)
+        public static uint SendVk(int vk, bool down)
         {
             Native.INPUT[] inp = new Native.INPUT[1];
             if (vk == Native.VK_LBUTTON || vk == Native.VK_RBUTTON || vk == Native.VK_MBUTTON)
@@ -455,14 +502,19 @@ namespace WshHelper
             }
             else
             {
+                ushort scan = (ushort)Native.MapVirtualKey((uint)vk, 0);
+                bool scanOnly = (Cfg != null && Cfg.InjectMode == 1 && scan != 0);
                 inp[0].type = 1;
-                inp[0].u.ki.wVk = (ushort)vk;
-                inp[0].u.ki.wScan = (ushort)Native.MapVirtualKey((uint)vk, 0);
+                // 方式1(默认): 带虚拟键+扫描码。方式2: 只发扫描码 —— 有些用
+                // DirectInput/RawInput 读键盘的老游戏只认扫描码。
+                inp[0].u.ki.wVk = scanOnly ? (ushort)0 : (ushort)vk;
+                inp[0].u.ki.wScan = scan;
                 inp[0].u.ki.dwFlags = down ? 0u : Native.KEYEVENTF_KEYUP;
+                if (scanOnly) inp[0].u.ki.dwFlags |= Native.KEYEVENTF_SCANCODE;
                 if (IsExtended(vk)) inp[0].u.ki.dwFlags |= Native.KEYEVENTF_EXTENDEDKEY;
                 inp[0].u.ki.dwExtraInfo = Native.InjectMagic;
             }
-            Native.SendInput(1, inp, Marshal.SizeOf(typeof(Native.INPUT)));
+            return Native.SendInput(1, inp, Marshal.SizeOf(typeof(Native.INPUT)));
         }
 
         static bool IsExtended(int vk)

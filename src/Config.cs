@@ -87,6 +87,8 @@ namespace WshHelper
         public bool AlwaysHealthBars { get; set; }  // 注册表 healthbars 开关
         public bool InGameIcon { get; set; }
         public bool ItemKeySelectHeroFirst { get; set; }   // 物品键先按F1选英雄
+        public int SuspendKey { get; set; }                // 按住它时临时停用改键(0=未设)
+        public int InjectMode { get; set; }                // 0=虚拟键+扫描码(默认) 1=纯扫描码
         public int ChatEnterDelay { get; set; }            // 回车后等待毫秒
         public int ChatCharDelay { get; set; }             // 每个字符间隔毫秒
         public int IconX { get; set; }
@@ -355,6 +357,7 @@ namespace WshHelper
             if (IconOpacity < 20 || IconOpacity > 100) IconOpacity = 65;
             if (ChatEnterDelay < 30 || ChatEnterDelay > 2000) ChatEnterDelay = 150;
             if (ChatCharDelay < 1 || ChatCharDelay > 200) ChatCharDelay = 12;
+            if (InjectMode < 0 || InjectMode > 1) InjectMode = 0;
             if (LaunchModeValue < 0 || LaunchModeValue > 2) LaunchModeValue = (int)LaunchMode.BorderlessFullscreen;
             if (string.IsNullOrEmpty(VerSourceDir)) VerSourceDir = War3Version.DefaultSourceDir(War3Path);
         }
