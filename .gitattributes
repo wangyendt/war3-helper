@@ -1,0 +1,10 @@
+# 统一换行符处理：仓库内存 LF，Windows 检出为 CRLF
+* text=auto
+
+*.cs   text
+*.ps1  text
+*.md   text
+
+*.ico  binary
+*.exe  binary
+*.png  binary

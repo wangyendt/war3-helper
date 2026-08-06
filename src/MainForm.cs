@@ -1,0 +1,1597 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.IO;
+using System.Threading;
+using System.Windows.Forms;
+
+namespace WshHelper
+{
+    // 按键采集框：点击后按任意键/鼠标侧键采集，双击清除
+    public class CaptureBox : TextBox
+    {
+        int _vk;
+        public event Action VkChanged;
+        public bool AllowMouse = true;
+        public bool IgnoreModifiers = false;
+
+        public CaptureBox()
+        {
+            ReadOnly = true;
+            BackColor = Color.White;
+            Cursor = Cursors.Hand;
+            TextAlign = HorizontalAlignment.Center;
+        }
+
+        public int Vk
+        {
+            get { return _vk; }
+            set { _vk = value; Text = KeyNames.Name(value); }
+        }
+
+        static bool IsMod(int vk)
+        {
+            return vk == 0x10 || vk == 0x11 || vk == 0x12 || (vk >= 0xA0 && vk <= 0xA5);
+        }
+
+        void SetVk(int vk)
+        {
+            if (IgnoreModifiers && IsMod(vk)) return;
+            _vk = vk;
+            Text = KeyNames.Name(vk);
+            if (VkChanged != null) VkChanged();
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (Focused)
+            {
+                int vk = (int)(keyData & Keys.KeyCode);
+                if (vk != 0) { SetVk(vk); return true; }
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            int vk = (int)e.KeyCode;
+            if (vk != 0) SetVk(vk);
+        }
+
+        protected override void OnKeyPress(KeyPressEventArgs e) { e.Handled = true; }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (!AllowMouse) return;
+            if (e.Button == MouseButtons.Middle) SetVk(Native.VK_MBUTTON);
+            else if (e.Button == MouseButtons.XButton1) SetVk(Native.VK_XBUTTON1);
+            else if (e.Button == MouseButtons.XButton2) SetVk(Native.VK_XBUTTON2);
+        }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            if (AllowMouse && Focused)
+                SetVk(e.Delta > 0 ? Native.VK_WHEELUP : Native.VK_WHEELDOWN);
+        }
+
+        protected override void OnDoubleClick(EventArgs e)
+        {
+            base.OnDoubleClick(e);
+            SetVk(0);
+        }
+    }
+
+    public class MainForm : Form, IHelperActions
+    {
+        AppConfig cfg;
+        OverlayForm overlay;
+        InGameIconForm iconForm;
+        ReplayWatcher replayWatcher;
+        NotifyIcon tray;
+        bool reallyExit = false;
+        bool loading = true;
+
+        // 改键页
+        CheckBox chkRemap, chkCombo, chkWin;
+        CaptureBox[] capItems = new CaptureBox[6];
+        ListView lvMaps;
+        CaptureBox capSrc, capDst;
+        ComboBox cmbSchemes;
+        // 喊话页
+        CheckBox chkChat;
+        ListView lvChats;
+        CaptureBox capChatKey;
+        CheckBox chkMCtrl, chkMAlt, chkMShift;
+        TextBox txtChat, txtChatNote;
+        // 窗口页
+        TextBox txtPath;
+        ComboBox cmbRes, cmbLaunch;
+        CheckBox chkOpenGL, chkLock, chkHpBars, chkAlwaysBars, chkIcon;
+        CaptureBox capBoss;
+        TrackBar trackOpacity, trackIconOpacity;
+        // 录像页
+        ListView lvReplays;
+        Label lblReplayStatus;
+        CheckBox chkReplay, chkIgnoreShort;
+        // 版本页
+        Label lblCurVer;
+        TextBox txtVerDir;
+        ListView lvVersions;
+        ProgressBar barVer;
+        Label lblVerStatus;
+        Button btnSwitch, btnDownload;
+        List<VersionPackage> versionPkgs = new List<VersionPackage>();
+        string currentLabel = "";
+        // 提醒页
+        CheckBox chkApm;
+        NumericUpDown numOx, numOy, numWarn;
+        ListView lvRem;
+        TextBox txtRemName;
+        NumericUpDown numRemSec;
+        // 状态栏
+        Label lblStatus;
+        System.Windows.Forms.Timer timerMain;
+
+        const int HOTKEY_BOSS = 1;
+
+        public MainForm()
+        {
+            cfg = AppConfig.Load();
+            Engine.Cfg = cfg;
+
+            Text = "WSH魔兽助手 (U9WSH复刻增强版)";
+            Font = new Font("Microsoft YaHei UI", 9F);
+            ClientSize = new Size(720, 560);
+            FormBorderStyle = FormBorderStyle.FixedSingle;
+            MaximizeBox = false;
+            StartPosition = FormStartPosition.CenterScreen;
+            Icon = IconGen.AppIcon();
+
+            BuildUi();
+            Util.DpiScale(this);
+            LoadCfgToUi();
+            loading = false;
+
+            overlay = new OverlayForm();
+            overlay.Cfg = cfg;
+
+            iconForm = new InGameIconForm();
+            iconForm.Cfg = cfg;
+            iconForm.Actions = this;
+            iconForm.CreateControl();
+            iconForm.Init();
+
+            Engine.Install();
+            Engine.Rebuild();
+            Engine.HotToggleRemap += delegate { BeginInvoke((Action)ActToggleRemap); };
+            Engine.HotNextScheme += delegate { BeginInvoke((Action)NextSchemeHot); };
+            Engine.HotToggleLock += delegate { BeginInvoke((Action)ActToggleLock); };
+            Engine.HotToggleBars += delegate { BeginInvoke((Action)ActToggleHpBars); };
+            Engine.HotToggleApm += delegate { BeginInvoke((Action)ActToggleApm); };
+            Engine.HotTimerReset += delegate { BeginInvoke((Action)ActStartTimer); };
+
+            replayWatcher = new ReplayWatcher();
+            replayWatcher.Saved += delegate(string s)
+            {
+                BeginInvoke((Action)delegate
+                {
+                    lblReplayStatus.Text = string.Format("[{0:HH:mm}] {1}", DateTime.Now, s);
+                    if (tray != null) tray.ShowBalloonTip(2000, "WSH助手", s, ToolTipIcon.Info);
+                    ReloadReplays();
+                });
+            };
+            ApplyReplayWatcher();
+
+            SetupTray();
+            RegisterBoss();
+            War3Ctl.SetAlwaysHealthBars(cfg.AlwaysHealthBars);
+
+            timerMain = new System.Windows.Forms.Timer();
+            timerMain.Interval = 300;
+            timerMain.Tick += OnMainTick;
+            timerMain.Start();
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == Native.WM_HOTKEY && m.WParam.ToInt32() == HOTKEY_BOSS)
+            {
+                War3Ctl.ToggleBoss();
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        void RegisterBoss()
+        {
+            Native.UnregisterHotKey(Handle, HOTKEY_BOSS);
+            if (cfg.BossKey != 0)
+                Native.RegisterHotKey(Handle, HOTKEY_BOSS, 0, (uint)cfg.BossKey);
+        }
+
+        // ================= IHelperActions =================
+        public void ActToggleRemap()
+        {
+            chkRemap.Checked = !chkRemap.Checked;
+            overlay.FlashMessage(cfg.RemapEnabled ? "改键: 开" : "改键: 关", 1500);
+        }
+
+        public void ActSelectScheme(int index)
+        {
+            if (index < 0 || index >= cfg.Schemes.Count) return;
+            cmbSchemes.SelectedIndex = index;
+            overlay.FlashMessage("方案: " + cfg.ActiveScheme.Name, 1800);
+        }
+
+        void NextSchemeHot()
+        {
+            if (cfg.Schemes.Count < 2) { overlay.FlashMessage("只有一个方案", 1500); return; }
+            ActSelectScheme((cfg.CurrentScheme + 1) % cfg.Schemes.Count);
+        }
+
+        public void ActToggleLock()
+        {
+            chkLock.Checked = !chkLock.Checked;
+            overlay.FlashMessage(cfg.AutoLockMouse ? "锁定鼠标: 开" : "锁定鼠标: 关", 1500);
+        }
+
+        public void ActToggleApm()
+        {
+            chkApm.Checked = !chkApm.Checked;
+            overlay.FlashMessage(cfg.ShowApm ? "APM显示: 开" : "APM显示: 关", 1200);
+        }
+
+        public void ActToggleHpBars()
+        {
+            chkHpBars.Checked = !chkHpBars.Checked;
+            overlay.FlashMessage(cfg.ShowHpBars ? "血条常显: 开" : "血条常显: 关", 1500);
+        }
+
+        public void ActStartTimer() { overlay.ResetGameTimer(); }
+
+        public void ActStopTimer()
+        {
+            overlay.StopGameTimer();
+            overlay.FlashMessage("计时已停止", 1500);
+        }
+
+        public void ActToggleReminder(int index)
+        {
+            if (index < 0 || index >= cfg.Reminders.Count) return;
+            cfg.Reminders[index].Enabled = !cfg.Reminders[index].Enabled;
+            cfg.Save();
+            ReloadReminders();
+            overlay.FlashMessage(cfg.Reminders[index].Name +
+                (cfg.Reminders[index].Enabled ? " 提醒开" : " 提醒关"), 1500);
+        }
+
+        public void ActBorderless()
+        {
+            if (!War3Ctl.MakeBorderless()) MessageBox.Show(this, "未找到魔兽窗口，请先窗口化启动魔兽");
+        }
+
+        public void ActRestoreBorder()
+        {
+            if (!War3Ctl.RestoreBorder(cfg.WinW, cfg.WinH)) MessageBox.Show(this, "未找到魔兽窗口");
+        }
+
+        public void ActSendChat(string text) { Engine.SendChatAsync(text); }
+
+        public void ActOpenReplayDir()
+        {
+            string dir = War3Ctl.AutoSaveDir(cfg.War3Path);
+            try { Directory.CreateDirectory(dir); System.Diagnostics.Process.Start("explorer.exe", dir); }
+            catch { }
+        }
+
+        public void ActBackupReplayNow()
+        {
+            if (replayWatcher != null) replayWatcher.BackupNow();
+        }
+
+        public void ActShowMain() { RestoreFromTray(); }
+
+        public void ActExit() { reallyExit = true; Close(); }
+
+        // ================= 主循环 =================
+        void OnMainTick(object s, EventArgs e)
+        {
+            War3Ctl.MaintainClip(cfg.AutoLockMouse);
+            Engine.TickBars();
+            if (iconForm != null) iconForm.Sync();
+            bool found = War3Ctl.MainWindow() != IntPtr.Zero;
+            string bars = cfg.ShowHpBars ? (Engine.BarsActive ? "开(生效中)" : "开(待机)") : "关";
+            lblStatus.Text = string.Format("魔兽: {0}    改键: {1}    方案: {2}    血条常显: {3}    老板键: {4}",
+                found ? (Engine.War3Foreground() ? "游戏中" : "已找到") : "未运行",
+                cfg.RemapEnabled ? "开" : "关",
+                cfg.ActiveScheme.Name,
+                bars,
+                KeyNames.Name(cfg.BossKey));
+        }
+
+        // ================= UI构建 =================
+        void BuildUi()
+        {
+            TabControl tabs = new TabControl();
+            tabs.Bounds = new Rectangle(0, 0, 720, 535);
+            Controls.Add(tabs);
+
+            lblStatus = new Label();
+            lblStatus.Bounds = new Rectangle(8, 539, 710, 20);
+            lblStatus.ForeColor = Color.DimGray;
+            Controls.Add(lblStatus);
+
+            TabPage tp1 = new TabPage("改键");
+            TabPage tp2 = new TabPage("快捷喊话");
+            TabPage tp3 = new TabPage("窗口/控制");
+            TabPage tp4 = new TabPage("录像");
+            TabPage tp5 = new TabPage("版本切换");
+            TabPage tp6 = new TabPage("提醒/APM");
+            TabPage tp7 = new TabPage("使用说明");
+            tabs.TabPages.AddRange(new TabPage[] { tp1, tp2, tp3, tp4, tp5, tp6, tp7 });
+
+            BuildTabRemap(tp1);
+            BuildTabChat(tp2);
+            BuildTabWindow(tp3);
+            BuildTabReplay(tp4);
+            BuildTabVersion(tp5);
+            BuildTabMisc(tp6);
+            BuildTabHelp(tp7);
+        }
+
+        void BuildTabRemap(TabPage tp)
+        {
+            chkRemap = new CheckBox();
+            chkRemap.Text = "启用改键 (Ctrl+F2)";
+            chkRemap.Bounds = new Rectangle(12, 10, 160, 22);
+            chkRemap.CheckedChanged += delegate { if (loading) return; cfg.RemapEnabled = chkRemap.Checked; SaveRebuild(); };
+            tp.Controls.Add(chkRemap);
+
+            chkCombo = new CheckBox();
+            chkCombo.Text = "按住Ctrl/Alt/Shift时仍改键";
+            chkCombo.Bounds = new Rectangle(190, 10, 200, 22);
+            chkCombo.CheckedChanged += delegate { if (loading) return; cfg.ApplyToCombo = chkCombo.Checked; SaveRebuild(); };
+            tp.Controls.Add(chkCombo);
+
+            chkWin = new CheckBox();
+            chkWin.Text = "游戏中屏蔽Win键";
+            chkWin.Bounds = new Rectangle(410, 10, 150, 22);
+            chkWin.CheckedChanged += delegate { if (loading) return; cfg.BlockWinKey = chkWin.Checked; SaveRebuild(); };
+            tp.Controls.Add(chkWin);
+
+            GroupBox gItems = new GroupBox();
+            gItems.Text = "物品栏快捷键 (物品1~6 = 小键盘 7 8 4 5 1 2)";
+            gItems.Bounds = new Rectangle(12, 40, 330, 130);
+            tp.Controls.Add(gItems);
+            for (int i = 0; i < 6; i++)
+            {
+                int col = i / 3, row = i % 3;
+                Label l = new Label();
+                l.Text = "物品" + (i + 1);
+                l.Bounds = new Rectangle(15 + col * 160, 28 + row * 32, 45, 20);
+                gItems.Controls.Add(l);
+                CaptureBox cb = new CaptureBox();
+                cb.Bounds = new Rectangle(62 + col * 160, 24 + row * 32, 90, 24);
+                int idx = i;
+                cb.VkChanged += delegate
+                {
+                    if (loading) return;
+                    cfg.ActiveScheme.ItemKeys[idx] = cb.Vk;
+                    SaveRebuild();
+                };
+                capItems[i] = cb;
+                gItems.Controls.Add(cb);
+            }
+
+            Label hint = new Label();
+            hint.Text = "点击输入框后按键即可设置（支持鼠标侧键/中键/滚轮），双击清除。";
+            hint.Bounds = new Rectangle(14, 174, 330, 36);
+            hint.ForeColor = Color.DimGray;
+            tp.Controls.Add(hint);
+
+            GroupBox gScheme = new GroupBox();
+            gScheme.Text = "改键方案 (Ctrl+F3 游戏中切换)";
+            gScheme.Bounds = new Rectangle(12, 214, 330, 100);
+            tp.Controls.Add(gScheme);
+
+            cmbSchemes = new ComboBox();
+            cmbSchemes.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbSchemes.Bounds = new Rectangle(15, 26, 300, 24);
+            cmbSchemes.SelectedIndexChanged += delegate
+            {
+                if (loading || cmbSchemes.SelectedIndex < 0) return;
+                cfg.CurrentScheme = cmbSchemes.SelectedIndex;
+                ReloadSchemeUi();
+                SaveRebuild();
+            };
+            gScheme.Controls.Add(cmbSchemes);
+
+            Button bNew = new Button(); bNew.Text = "新建"; bNew.Bounds = new Rectangle(15, 58, 70, 28);
+            bNew.Click += delegate
+            {
+                string name = Prompt("新方案名称:", "方案" + (cfg.Schemes.Count + 1));
+                if (string.IsNullOrEmpty(name)) return;
+                Scheme s = new Scheme(); s.Name = name;
+                cfg.Schemes.Add(s);
+                cfg.CurrentScheme = cfg.Schemes.Count - 1;
+                ReloadSchemeList();
+                SaveRebuild();
+            };
+            gScheme.Controls.Add(bNew);
+
+            Button bRen = new Button(); bRen.Text = "重命名"; bRen.Bounds = new Rectangle(93, 58, 70, 28);
+            bRen.Click += delegate
+            {
+                string name = Prompt("方案名称:", cfg.ActiveScheme.Name);
+                if (string.IsNullOrEmpty(name)) return;
+                cfg.ActiveScheme.Name = name;
+                ReloadSchemeList();
+                cfg.Save();
+            };
+            gScheme.Controls.Add(bRen);
+
+            Button bDel = new Button(); bDel.Text = "删除"; bDel.Bounds = new Rectangle(171, 58, 70, 28);
+            bDel.Click += delegate
+            {
+                if (cfg.Schemes.Count <= 1) { MessageBox.Show(this, "至少保留一个方案"); return; }
+                if (MessageBox.Show(this, "删除方案 [" + cfg.ActiveScheme.Name + "] ?", "确认",
+                    MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+                cfg.Schemes.RemoveAt(cfg.CurrentScheme);
+                if (cfg.CurrentScheme >= cfg.Schemes.Count) cfg.CurrentScheme = 0;
+                ReloadSchemeList();
+                SaveRebuild();
+            };
+            gScheme.Controls.Add(bDel);
+
+            GroupBox gMaps = new GroupBox();
+            gMaps.Text = "自定义改键 (任意键 → 任意键)";
+            gMaps.Bounds = new Rectangle(354, 40, 350, 420);
+            tp.Controls.Add(gMaps);
+
+            lvMaps = new ListView();
+            lvMaps.View = View.Details;
+            lvMaps.FullRowSelect = true;
+            lvMaps.HideSelection = false;
+            lvMaps.Bounds = new Rectangle(12, 24, 326, 310);
+            lvMaps.Columns.Add("按下", 150);
+            lvMaps.Columns.Add("实际生效", 150);
+            gMaps.Controls.Add(lvMaps);
+
+            capSrc = new CaptureBox();
+            capSrc.Bounds = new Rectangle(12, 344, 110, 24);
+            gMaps.Controls.Add(capSrc);
+            Label arrow = new Label(); arrow.Text = "→"; arrow.Bounds = new Rectangle(128, 348, 22, 20);
+            gMaps.Controls.Add(arrow);
+            capDst = new CaptureBox();
+            capDst.Bounds = new Rectangle(152, 344, 110, 24);
+            gMaps.Controls.Add(capDst);
+
+            Button bAdd = new Button(); bAdd.Text = "添加"; bAdd.Bounds = new Rectangle(12, 378, 100, 30);
+            bAdd.Click += delegate
+            {
+                if (capSrc.Vk == 0 || capDst.Vk == 0) { MessageBox.Show(this, "请先设置两个按键"); return; }
+                if (capSrc.Vk == capDst.Vk) { MessageBox.Show(this, "两个键相同，无需改键"); return; }
+                KeyMapEntry en = new KeyMapEntry(); en.Src = capSrc.Vk; en.Dst = capDst.Vk;
+                cfg.ActiveScheme.Maps.RemoveAll(delegate(KeyMapEntry x) { return x.Src == en.Src; });
+                cfg.ActiveScheme.Maps.Add(en);
+                capSrc.Vk = 0; capDst.Vk = 0;
+                ReloadMaps();
+                SaveRebuild();
+            };
+            gMaps.Controls.Add(bAdd);
+
+            Button bDelMap = new Button(); bDelMap.Text = "删除选中"; bDelMap.Bounds = new Rectangle(120, 378, 100, 30);
+            bDelMap.Click += delegate
+            {
+                if (lvMaps.SelectedIndices.Count == 0) return;
+                cfg.ActiveScheme.Maps.RemoveAt(lvMaps.SelectedIndices[0]);
+                ReloadMaps();
+                SaveRebuild();
+            };
+            gMaps.Controls.Add(bDelMap);
+
+            Label hint2 = new Label();
+            hint2.Text = "改键仅在魔兽窗口为前台时生效，不影响其他程序。";
+            hint2.Bounds = new Rectangle(14, 320, 330, 40);
+            hint2.ForeColor = Color.DimGray;
+            tp.Controls.Add(hint2);
+        }
+
+        void BuildTabChat(TabPage tp)
+        {
+            chkChat = new CheckBox();
+            chkChat.Text = "启用快捷喊话（按热键自动发送聊天）";
+            chkChat.Bounds = new Rectangle(12, 10, 280, 22);
+            chkChat.CheckedChanged += delegate { if (loading) return; cfg.ChatEnabled = chkChat.Checked; SaveRebuild(); };
+            tp.Controls.Add(chkChat);
+
+            Button bReset = new Button();
+            bReset.Text = "恢复默认DOTA命令";
+            bReset.Bounds = new Rectangle(540, 6, 160, 28);
+            bReset.Click += delegate
+            {
+                if (MessageBox.Show(this, "将补回所有默认的DOTA命令条目（已有的同内容条目不会重复添加）。继续？",
+                    "确认", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+                foreach (ChatItem c in AppConfig.DefaultChats())
+                {
+                    bool exists = false;
+                    foreach (ChatItem old in cfg.Chats) if (old.Text == c.Text) { exists = true; break; }
+                    if (!exists) cfg.Chats.Add(c);
+                }
+                ReloadChats();
+                SaveRebuild();
+            };
+            tp.Controls.Add(bReset);
+
+            lvChats = new ListView();
+            lvChats.View = View.Details;
+            lvChats.FullRowSelect = true;
+            lvChats.HideSelection = false;
+            lvChats.Bounds = new Rectangle(12, 40, 690, 320);
+            lvChats.Columns.Add("热键", 120);
+            lvChats.Columns.Add("发送内容", 240);
+            lvChats.Columns.Add("说明", 300);
+            lvChats.SelectedIndexChanged += delegate
+            {
+                if (loading || lvChats.SelectedIndices.Count == 0) return;
+                ChatItem c = cfg.Chats[lvChats.SelectedIndices[0]];
+                loading = true;
+                capChatKey.Vk = c.Key;
+                chkMCtrl.Checked = (c.Mods & Mods.Ctrl) != 0;
+                chkMAlt.Checked = (c.Mods & Mods.Alt) != 0;
+                chkMShift.Checked = (c.Mods & Mods.Shift) != 0;
+                txtChat.Text = c.Text;
+                txtChatNote.Text = c.Note == null ? "" : c.Note;
+                loading = false;
+            };
+            tp.Controls.Add(lvChats);
+
+            Label l1 = new Label(); l1.Text = "热键:"; l1.Bounds = new Rectangle(12, 374, 40, 20);
+            tp.Controls.Add(l1);
+            chkMCtrl = new CheckBox(); chkMCtrl.Text = "Ctrl"; chkMCtrl.Bounds = new Rectangle(54, 372, 52, 22);
+            tp.Controls.Add(chkMCtrl);
+            chkMAlt = new CheckBox(); chkMAlt.Text = "Alt"; chkMAlt.Bounds = new Rectangle(108, 372, 46, 22);
+            tp.Controls.Add(chkMAlt);
+            chkMShift = new CheckBox(); chkMShift.Text = "Shift"; chkMShift.Bounds = new Rectangle(156, 372, 56, 22);
+            tp.Controls.Add(chkMShift);
+            capChatKey = new CaptureBox();
+            capChatKey.IgnoreModifiers = true;
+            capChatKey.Bounds = new Rectangle(214, 370, 86, 24);
+            tp.Controls.Add(capChatKey);
+
+            Label l2 = new Label(); l2.Text = "内容:"; l2.Bounds = new Rectangle(12, 404, 40, 20);
+            tp.Controls.Add(l2);
+            txtChat = new TextBox();
+            txtChat.Bounds = new Rectangle(54, 400, 246, 24);
+            tp.Controls.Add(txtChat);
+
+            Label l3 = new Label(); l3.Text = "说明:"; l3.Bounds = new Rectangle(310, 404, 40, 20);
+            tp.Controls.Add(l3);
+            txtChatNote = new TextBox();
+            txtChatNote.Bounds = new Rectangle(352, 400, 200, 24);
+            tp.Controls.Add(txtChatNote);
+
+            Button bAdd = new Button(); bAdd.Text = "添加"; bAdd.Bounds = new Rectangle(310, 369, 58, 27);
+            bAdd.Click += delegate
+            {
+                if (string.IsNullOrEmpty(txtChat.Text)) { MessageBox.Show(this, "请先填写发送内容"); return; }
+                ChatItem c = new ChatItem();
+                c.Key = capChatKey.Vk; c.Mods = CurrentChatMods();
+                c.Text = txtChat.Text; c.Note = txtChatNote.Text;
+                cfg.Chats.Add(c);
+                ReloadChats();
+                SaveRebuild();
+            };
+            tp.Controls.Add(bAdd);
+
+            Button bUpd = new Button(); bUpd.Text = "修改选中"; bUpd.Bounds = new Rectangle(374, 369, 76, 27);
+            bUpd.Click += delegate
+            {
+                if (lvChats.SelectedIndices.Count == 0) { MessageBox.Show(this, "请先在列表中选中一条"); return; }
+                ChatItem c = cfg.Chats[lvChats.SelectedIndices[0]];
+                c.Key = capChatKey.Vk; c.Mods = CurrentChatMods();
+                c.Text = txtChat.Text; c.Note = txtChatNote.Text;
+                ReloadChats();
+                SaveRebuild();
+            };
+            tp.Controls.Add(bUpd);
+
+            Button bDel = new Button(); bDel.Text = "删除"; bDel.Bounds = new Rectangle(456, 369, 58, 27);
+            bDel.Click += delegate
+            {
+                if (lvChats.SelectedIndices.Count == 0) return;
+                cfg.Chats.RemoveAt(lvChats.SelectedIndices[0]);
+                ReloadChats();
+                SaveRebuild();
+            };
+            tp.Controls.Add(bDel);
+
+            Button bTest = new Button(); bTest.Text = "测试发送"; bTest.Bounds = new Rectangle(520, 369, 76, 27);
+            bTest.Click += delegate
+            {
+                if (string.IsNullOrEmpty(txtChat.Text)) return;
+                if (War3Ctl.MainWindow() == IntPtr.Zero) { MessageBox.Show(this, "魔兽未运行"); return; }
+                Native.SetForegroundWindow(War3Ctl.MainWindow());
+                string t = txtChat.Text;
+                System.Windows.Forms.Timer d = new System.Windows.Forms.Timer();
+                d.Interval = 600;
+                d.Tick += delegate { d.Stop(); d.Dispose(); Engine.SendChatAsync(t); };
+                d.Start();
+            };
+            tp.Controls.Add(bTest);
+
+            Label hint = new Label();
+            hint.Text = "· 默认DOTA命令用 Alt+数字 触发（War3本身不占用Alt+数字），可自行改成任意组合键。\r\n" +
+                        "· 发送到的频道 = 你在游戏里最后一次聊天选的频道（默认队伍/全部）。开局模式命令请先切到全部。\r\n" +
+                        "· 没设热键的条目不会触发，但仍可从局内悬浮图标菜单里点击发送。";
+            hint.Bounds = new Rectangle(12, 430, 690, 60);
+            hint.ForeColor = Color.DimGray;
+            tp.Controls.Add(hint);
+        }
+
+        int CurrentChatMods()
+        {
+            int m = 0;
+            if (chkMCtrl.Checked) m |= Mods.Ctrl;
+            if (chkMAlt.Checked) m |= Mods.Alt;
+            if (chkMShift.Checked) m |= Mods.Shift;
+            return m;
+        }
+
+        static readonly string[] CommonRes = new string[]
+        {
+            "800x600","1024x768","1280x720","1280x960","1366x768","1440x900",
+            "1600x900","1680x1050","1920x1080","1920x1200","2560x1080",
+            "2560x1440","3440x1440","3840x2160"
+        };
+
+        void BuildTabWindow(TabPage tp)
+        {
+            Label l1 = new Label(); l1.Text = "魔兽路径:"; l1.Bounds = new Rectangle(12, 16, 70, 20);
+            tp.Controls.Add(l1);
+            txtPath = new TextBox();
+            txtPath.Bounds = new Rectangle(84, 12, 500, 24);
+            txtPath.TextChanged += delegate { if (loading) return; cfg.War3Path = txtPath.Text; cfg.Save(); ApplyReplayWatcher(); };
+            tp.Controls.Add(txtPath);
+            Button bBrowse = new Button(); bBrowse.Text = "浏览"; bBrowse.Bounds = new Rectangle(594, 10, 70, 27);
+            bBrowse.Click += delegate
+            {
+                FolderBrowserDialog d = new FolderBrowserDialog();
+                d.SelectedPath = cfg.War3Path;
+                if (d.ShowDialog(this) == DialogResult.OK) txtPath.Text = d.SelectedPath;
+            };
+            tp.Controls.Add(bBrowse);
+
+            Label l2 = new Label(); l2.Text = "启动模式:"; l2.Bounds = new Rectangle(12, 52, 70, 20);
+            tp.Controls.Add(l2);
+            cmbLaunch = new ComboBox();
+            cmbLaunch.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbLaunch.Bounds = new Rectangle(84, 48, 200, 24);
+            cmbLaunch.Items.AddRange(new object[] { "独占全屏", "窗口化", "无边框全屏 (推荐)" });
+            cmbLaunch.SelectedIndexChanged += delegate
+            {
+                if (loading) return;
+                cfg.LaunchModeValue = cmbLaunch.SelectedIndex;
+                cmbRes.Enabled = (cfg.Launch == LaunchMode.Windowed);
+                cfg.Save();
+            };
+            tp.Controls.Add(cmbLaunch);
+
+            Label l2b = new Label(); l2b.Text = "窗口分辨率:"; l2b.Bounds = new Rectangle(300, 52, 80, 20);
+            tp.Controls.Add(l2b);
+            cmbRes = new ComboBox();
+            cmbRes.DropDownStyle = ComboBoxStyle.DropDown;
+            cmbRes.Bounds = new Rectangle(382, 48, 130, 24);
+            cmbRes.Items.AddRange(CommonRes);
+            cmbRes.TextChanged += delegate
+            {
+                if (loading) return;
+                int w, h;
+                if (ParseRes(cmbRes.Text, out w, out h)) { cfg.WinW = w; cfg.WinH = h; cfg.Save(); }
+            };
+            tp.Controls.Add(cmbRes);
+
+            chkOpenGL = new CheckBox();
+            chkOpenGL.Text = "OpenGL模式";
+            chkOpenGL.Bounds = new Rectangle(528, 50, 120, 22);
+            chkOpenGL.CheckedChanged += delegate { if (loading) return; cfg.UseOpenGL = chkOpenGL.Checked; cfg.Save(); };
+            tp.Controls.Add(chkOpenGL);
+
+            Button bLaunch = new Button();
+            bLaunch.Text = "启动魔兽";
+            bLaunch.Bounds = new Rectangle(12, 86, 130, 36);
+            bLaunch.Font = new Font(Font, FontStyle.Bold);
+            bLaunch.Click += delegate
+            {
+                string err = War3Ctl.Launch(cfg, cfg.Launch);
+                if (err != null) MessageBox.Show(this, err);
+            };
+            tp.Controls.Add(bLaunch);
+
+            Button bBorder = new Button(); bBorder.Text = "立即伪全屏"; bBorder.Bounds = new Rectangle(152, 86, 120, 36);
+            bBorder.Click += delegate { ActBorderless(); };
+            tp.Controls.Add(bBorder);
+
+            Button bRestore = new Button(); bRestore.Text = "恢复窗口边框"; bRestore.Bounds = new Rectangle(282, 86, 120, 36);
+            bRestore.Click += delegate { ActRestoreBorder(); };
+            tp.Controls.Add(bRestore);
+
+            GroupBox gBars = new GroupBox();
+            gBars.Text = "血条 / 蓝条";
+            gBars.Bounds = new Rectangle(12, 134, 690, 96);
+            tp.Controls.Add(gBars);
+
+            chkAlwaysBars = new CheckBox();
+            chkAlwaysBars.Text = "开启游戏自带的\"始终显示生命条\"选项";
+            chkAlwaysBars.Bounds = new Rectangle(14, 24, 300, 22);
+            chkAlwaysBars.CheckedChanged += delegate
+            {
+                if (loading) return;
+                cfg.AlwaysHealthBars = chkAlwaysBars.Checked;
+                War3Ctl.SetAlwaysHealthBars(cfg.AlwaysHealthBars);
+                cfg.Save();
+            };
+            gBars.Controls.Add(chkAlwaysBars);
+
+            chkHpBars = new CheckBox();
+            chkHpBars.Text = "血条/蓝条常显 (Ctrl+F5) — 自动保持Alt按下";
+            chkHpBars.Bounds = new Rectangle(330, 24, 350, 22);
+            chkHpBars.CheckedChanged += delegate
+            {
+                if (loading) return;
+                cfg.ShowHpBars = chkHpBars.Checked;
+                if (!cfg.ShowHpBars) Engine.ReleaseSynthAlt();
+                cfg.Save();
+            };
+            gBars.Controls.Add(chkHpBars);
+
+            Label lBars = new Label();
+            lBars.Text = "常显原理：自动替你按住 Alt（War3 按住 Alt 会显示所有单位的血条，DOTA 等地图同时显示蓝条）。\r\n" +
+                         "你一操作就自动松开、停手约0.3秒后自动按回，因此不会误发 Alt+点击 信号，也不改动游戏任何文件。";
+            lBars.Bounds = new Rectangle(14, 50, 670, 40);
+            lBars.ForeColor = Color.DimGray;
+            gBars.Controls.Add(lBars);
+
+            chkLock = new CheckBox();
+            chkLock.Text = "鼠标锁定在魔兽窗口内 (Ctrl+F4 开/关)";
+            chkLock.Bounds = new Rectangle(12, 240, 300, 22);
+            chkLock.CheckedChanged += delegate
+            {
+                if (loading) return;
+                cfg.AutoLockMouse = chkLock.Checked;
+                if (!chkLock.Checked) War3Ctl.ReleaseClip();
+                cfg.Save();
+            };
+            tp.Controls.Add(chkLock);
+
+            Label l3 = new Label(); l3.Text = "老板键:"; l3.Bounds = new Rectangle(330, 242, 56, 20);
+            tp.Controls.Add(l3);
+            capBoss = new CaptureBox();
+            capBoss.Bounds = new Rectangle(388, 238, 100, 24);
+            capBoss.VkChanged += delegate
+            {
+                if (loading) return;
+                cfg.BossKey = capBoss.Vk;
+                RegisterBoss();
+                cfg.Save();
+            };
+            tp.Controls.Add(capBoss);
+            Label l3b = new Label();
+            l3b.Text = "全局有效，一键隐藏/恢复魔兽";
+            l3b.Bounds = new Rectangle(498, 242, 200, 20);
+            l3b.ForeColor = Color.DimGray;
+            tp.Controls.Add(l3b);
+
+            GroupBox gIcon = new GroupBox();
+            gIcon.Text = "局内悬浮图标";
+            gIcon.Bounds = new Rectangle(12, 272, 690, 96);
+            tp.Controls.Add(gIcon);
+
+            chkIcon = new CheckBox();
+            chkIcon.Text = "显示局内悬浮图标（可拖动，单击弹出菜单）";
+            chkIcon.Bounds = new Rectangle(14, 24, 310, 22);
+            chkIcon.CheckedChanged += delegate
+            {
+                if (loading) return;
+                cfg.InGameIcon = chkIcon.Checked;
+                cfg.Save();
+                if (iconForm != null) iconForm.Sync();
+            };
+            gIcon.Controls.Add(chkIcon);
+
+            Label lio = new Label(); lio.Text = "透明度:"; lio.Bounds = new Rectangle(330, 26, 56, 20);
+            gIcon.Controls.Add(lio);
+            trackIconOpacity = new TrackBar();
+            trackIconOpacity.Minimum = 20; trackIconOpacity.Maximum = 100; trackIconOpacity.TickFrequency = 10;
+            trackIconOpacity.Bounds = new Rectangle(388, 20, 180, 40);
+            trackIconOpacity.ValueChanged += delegate
+            {
+                if (loading) return;
+                cfg.IconOpacity = trackIconOpacity.Value;
+                if (iconForm != null) iconForm.Redraw();
+                cfg.Save();
+            };
+            gIcon.Controls.Add(trackIconOpacity);
+
+            Button bResetIcon = new Button();
+            bResetIcon.Text = "回到左上角";
+            bResetIcon.Bounds = new Rectangle(578, 24, 100, 28);
+            bResetIcon.Click += delegate
+            {
+                cfg.IconX = 8; cfg.IconY = 8; cfg.Save();
+                if (iconForm != null) { iconForm.Location = new Point(8, 8); iconForm.Redraw(); }
+            };
+            gIcon.Controls.Add(bResetIcon);
+
+            Label lIconHint = new Label();
+            lIconHint.Text = "拖动可移动位置，单击弹出分级菜单（改键/显示/计时/窗口/喊话/录像）。独占全屏模式下无法显示，请用无边框全屏。";
+            lIconHint.Bounds = new Rectangle(14, 62, 670, 30);
+            lIconHint.ForeColor = Color.DimGray;
+            gIcon.Controls.Add(lIconHint);
+
+            Label l4 = new Label(); l4.Text = "助手窗口透明度:"; l4.Bounds = new Rectangle(12, 378, 110, 20);
+            tp.Controls.Add(l4);
+            trackOpacity = new TrackBar();
+            trackOpacity.Minimum = 40; trackOpacity.Maximum = 100; trackOpacity.TickFrequency = 10;
+            trackOpacity.Bounds = new Rectangle(124, 372, 200, 40);
+            trackOpacity.ValueChanged += delegate
+            {
+                if (loading) return;
+                cfg.OpacityPercent = trackOpacity.Value;
+                Opacity = trackOpacity.Value / 100.0;
+                cfg.Save();
+            };
+            tp.Controls.Add(trackOpacity);
+
+            Label tips = new Label();
+            tips.Text = "无边框全屏 = 以桌面分辨率窗口化启动，游戏窗口出现后自动去边框铺满屏幕。\r\n" +
+                        "Alt+Tab 切换不卡顿、悬浮图标和APM都能正常显示，画面效果与全屏一致。";
+            tips.Bounds = new Rectangle(12, 418, 690, 44);
+            tips.ForeColor = Color.DimGray;
+            tp.Controls.Add(tips);
+        }
+
+        static bool ParseRes(string s, out int w, out int h)
+        {
+            w = h = 0;
+            if (string.IsNullOrEmpty(s)) return false;
+            int i = s.IndexOfAny(new char[] { 'x', 'X', '*', '×' });
+            if (i <= 0) return false;
+            return int.TryParse(s.Substring(0, i).Trim(), out w)
+                && int.TryParse(s.Substring(i + 1).Trim(), out h)
+                && w >= 640 && h >= 480;
+        }
+
+        void BuildTabReplay(TabPage tp)
+        {
+            chkReplay = new CheckBox();
+            chkReplay.Text = "每局结束自动备份录像";
+            chkReplay.Bounds = new Rectangle(12, 10, 190, 22);
+            chkReplay.CheckedChanged += delegate { if (loading) return; cfg.AutoSaveReplay = chkReplay.Checked; cfg.Save(); ApplyReplayWatcher(); };
+            tp.Controls.Add(chkReplay);
+
+            chkIgnoreShort = new CheckBox();
+            chkIgnoreShort.Text = "忽略不足5分钟的录像";
+            chkIgnoreShort.Bounds = new Rectangle(210, 10, 180, 22);
+            chkIgnoreShort.CheckedChanged += delegate { if (loading) return; cfg.IgnoreShortReplay = chkIgnoreShort.Checked; cfg.Save(); ApplyReplayWatcher(); };
+            tp.Controls.Add(chkIgnoreShort);
+
+            Button bRefresh = new Button(); bRefresh.Text = "刷新"; bRefresh.Bounds = new Rectangle(400, 6, 70, 28);
+            bRefresh.Click += delegate { ReloadReplays(); };
+            tp.Controls.Add(bRefresh);
+
+            Button bBackupNow = new Button(); bBackupNow.Text = "立即备份最近一局"; bBackupNow.Bounds = new Rectangle(478, 6, 140, 28);
+            bBackupNow.Click += delegate { ActBackupReplayNow(); };
+            tp.Controls.Add(bBackupNow);
+
+            Button bOpenDir = new Button(); bOpenDir.Text = "打开目录"; bOpenDir.Bounds = new Rectangle(624, 6, 78, 28);
+            bOpenDir.Click += delegate { ActOpenReplayDir(); };
+            tp.Controls.Add(bOpenDir);
+
+            lvReplays = new ListView();
+            lvReplays.View = View.Details;
+            lvReplays.FullRowSelect = true;
+            lvReplays.HideSelection = false;
+            lvReplays.GridLines = true;
+            lvReplays.Bounds = new Rectangle(12, 40, 690, 390);
+            lvReplays.Columns.Add("录像文件", 230);
+            lvReplays.Columns.Add("时长", 110);
+            lvReplays.Columns.Add("大小", 100);
+            lvReplays.Columns.Add("时间", 160);
+            lvReplays.Columns.Add("位置", 90);
+            lvReplays.DoubleClick += delegate { PlaySelectedReplay(); };
+            tp.Controls.Add(lvReplays);
+
+            Button bPlay = new Button(); bPlay.Text = "播放录像"; bPlay.Bounds = new Rectangle(12, 436, 100, 30);
+            bPlay.Click += delegate { PlaySelectedReplay(); };
+            tp.Controls.Add(bPlay);
+
+            Button bReveal = new Button(); bReveal.Text = "在资源管理器中显示"; bReveal.Bounds = new Rectangle(120, 436, 150, 30);
+            bReveal.Click += delegate
+            {
+                ReplayInfo r = SelectedReplay();
+                if (r == null) return;
+                try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + r.Path + "\""); }
+                catch { }
+            };
+            tp.Controls.Add(bReveal);
+
+            Button bRename = new Button(); bRename.Text = "重命名"; bRename.Bounds = new Rectangle(278, 436, 90, 30);
+            bRename.Click += delegate
+            {
+                ReplayInfo r = SelectedReplay();
+                if (r == null) return;
+                string name = Prompt("新文件名:", Path.GetFileNameWithoutExtension(r.Name));
+                if (string.IsNullOrEmpty(name)) return;
+                try
+                {
+                    string dst = Path.Combine(Path.GetDirectoryName(r.Path), name + ".w3g");
+                    File.Move(r.Path, dst);
+                    ReloadReplays();
+                }
+                catch (Exception ex) { MessageBox.Show(this, "重命名失败: " + ex.Message); }
+            };
+            tp.Controls.Add(bRename);
+
+            Button bDelete = new Button(); bDelete.Text = "删除"; bDelete.Bounds = new Rectangle(376, 436, 90, 30);
+            bDelete.Click += delegate
+            {
+                ReplayInfo r = SelectedReplay();
+                if (r == null) return;
+                if (MessageBox.Show(this, "确定删除录像 [" + r.Name + "] ？\r\n将移入回收站。",
+                    "确认删除", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
+                try
+                {
+                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(r.Path,
+                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                    ReloadReplays();
+                }
+                catch (Exception ex) { MessageBox.Show(this, "删除失败: " + ex.Message); }
+            };
+            tp.Controls.Add(bDelete);
+
+            lblReplayStatus = new Label();
+            lblReplayStatus.Text = "自动备份位置: Replay\\AutoSave\\Auto_日期_时长.w3g";
+            lblReplayStatus.Bounds = new Rectangle(12, 472, 690, 20);
+            lblReplayStatus.ForeColor = Color.DimGray;
+            tp.Controls.Add(lblReplayStatus);
+        }
+
+        ReplayInfo SelectedReplay()
+        {
+            if (lvReplays.SelectedItems.Count == 0) return null;
+            return lvReplays.SelectedItems[0].Tag as ReplayInfo;
+        }
+
+        void PlaySelectedReplay()
+        {
+            ReplayInfo r = SelectedReplay();
+            if (r == null) return;
+            if (War3Ctl.MainWindow() != IntPtr.Zero)
+            {
+                MessageBox.Show(this, "魔兽正在运行，请先退出后再播放录像。");
+                return;
+            }
+            string exe = War3Ctl.Exe(cfg.War3Path);
+            if (exe == null) { MessageBox.Show(this, "找不到 War3.exe"); return; }
+            try
+            {
+                string rel = r.Path;
+                string root = cfg.War3Path.TrimEnd('\\') + "\\";
+                if (rel.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                    rel = rel.Substring(root.Length);
+                System.Diagnostics.ProcessStartInfo psi =
+                    new System.Diagnostics.ProcessStartInfo(exe, "-loadfile \"" + rel + "\"");
+                psi.WorkingDirectory = cfg.War3Path;
+                System.Diagnostics.Process.Start(psi);
+            }
+            catch (Exception ex) { MessageBox.Show(this, "播放失败: " + ex.Message); }
+        }
+
+        void BuildTabVersion(TabPage tp)
+        {
+            lblCurVer = new Label();
+            lblCurVer.Font = new Font(Font, FontStyle.Bold);
+            lblCurVer.Bounds = new Rectangle(12, 12, 690, 22);
+            tp.Controls.Add(lblCurVer);
+
+            Label l1 = new Label(); l1.Text = "版本包目录:"; l1.Bounds = new Rectangle(12, 44, 80, 20);
+            tp.Controls.Add(l1);
+            txtVerDir = new TextBox();
+            txtVerDir.Bounds = new Rectangle(94, 40, 450, 24);
+            txtVerDir.TextChanged += delegate { if (loading) return; cfg.VerSourceDir = txtVerDir.Text; cfg.Save(); };
+            tp.Controls.Add(txtVerDir);
+            Button bBrowse = new Button(); bBrowse.Text = "浏览"; bBrowse.Bounds = new Rectangle(552, 38, 66, 27);
+            bBrowse.Click += delegate
+            {
+                FolderBrowserDialog d = new FolderBrowserDialog();
+                d.SelectedPath = cfg.VerSourceDir;
+                if (d.ShowDialog(this) == DialogResult.OK) { txtVerDir.Text = d.SelectedPath; ReloadVersions(); }
+            };
+            tp.Controls.Add(bBrowse);
+            Button bScan = new Button(); bScan.Text = "扫描"; bScan.Bounds = new Rectangle(626, 38, 66, 27);
+            bScan.Click += delegate { ReloadVersions(); };
+            tp.Controls.Add(bScan);
+
+            lvVersions = new ListView();
+            lvVersions.View = View.Details;
+            lvVersions.FullRowSelect = true;
+            lvVersions.HideSelection = false;
+            lvVersions.GridLines = true;
+            lvVersions.Bounds = new Rectangle(12, 72, 690, 280);
+            lvVersions.Columns.Add("版本", 120);
+            lvVersions.Columns.Add("状态", 130);
+            lvVersions.Columns.Add("包大小", 100);
+            lvVersions.Columns.Add("版本包文件", 320);
+            tp.Controls.Add(lvVersions);
+
+            btnSwitch = new Button();
+            btnSwitch.Text = "切换到选中版本";
+            btnSwitch.Bounds = new Rectangle(12, 360, 150, 34);
+            btnSwitch.Font = new Font(Font, FontStyle.Bold);
+            btnSwitch.Click += delegate { DoSwitchVersion(); };
+            tp.Controls.Add(btnSwitch);
+
+            btnDownload = new Button();
+            btnDownload.Text = "从网址下载版本包...";
+            btnDownload.Bounds = new Rectangle(172, 360, 170, 34);
+            btnDownload.Click += delegate { DoDownloadVersion(); };
+            tp.Controls.Add(btnDownload);
+
+            Button bStore = new Button();
+            bStore.Text = "打开版本仓库";
+            bStore.Bounds = new Rectangle(352, 360, 130, 34);
+            bStore.Click += delegate
+            {
+                string d = Path.Combine(cfg.War3Path, War3Version.StoreDirName);
+                try { Directory.CreateDirectory(d); System.Diagnostics.Process.Start("explorer.exe", d); }
+                catch { }
+            };
+            tp.Controls.Add(bStore);
+
+            barVer = new ProgressBar();
+            barVer.Bounds = new Rectangle(12, 402, 690, 18);
+            tp.Controls.Add(barVer);
+
+            lblVerStatus = new Label();
+            lblVerStatus.Bounds = new Rectangle(12, 424, 690, 20);
+            lblVerStatus.ForeColor = Color.DimGray;
+            tp.Controls.Add(lblVerStatus);
+
+            Label warn = new Label();
+            warn.Text =
+"切换原理：换出前会把当前版本的全部相关文件（War3.exe / Game.dll / Storm.dll / War3Patch.mpq 等）完整快照到\r\n" +
+"游戏目录的 VersionStore\\<版本>\\ 里，然后再应用目标版本。因此每次切换都可完整还原，不会因为版本包缺少\r\n" +
+"某个文件而损坏安装。切换前请先完全退出魔兽；若游戏装在C盘等受保护目录，请以管理员身份运行助手。";
+            warn.Bounds = new Rectangle(12, 448, 690, 60);
+            warn.ForeColor = Color.FromArgb(150, 90, 0);
+            tp.Controls.Add(warn);
+        }
+
+        void BuildTabMisc(TabPage tp)
+        {
+            GroupBox gApm = new GroupBox();
+            gApm.Text = "APM 实时显示";
+            gApm.Bounds = new Rectangle(12, 8, 690, 66);
+            tp.Controls.Add(gApm);
+
+            chkApm = new CheckBox();
+            chkApm.Text = "显示APM悬浮窗 (Ctrl+F7)";
+            chkApm.Bounds = new Rectangle(14, 26, 190, 22);
+            chkApm.CheckedChanged += delegate { if (loading) return; cfg.ShowApm = chkApm.Checked; cfg.Save(); };
+            gApm.Controls.Add(chkApm);
+
+            Label lox = new Label(); lox.Text = "位置 X:"; lox.Bounds = new Rectangle(230, 28, 50, 20);
+            gApm.Controls.Add(lox);
+            numOx = new NumericUpDown(); numOx.Minimum = 0; numOx.Maximum = 10000; numOx.Bounds = new Rectangle(282, 24, 70, 24);
+            numOx.ValueChanged += delegate { if (loading) return; cfg.OverlayX = (int)numOx.Value; cfg.Save(); };
+            gApm.Controls.Add(numOx);
+            Label loy = new Label(); loy.Text = "Y:"; loy.Bounds = new Rectangle(360, 28, 20, 20);
+            gApm.Controls.Add(loy);
+            numOy = new NumericUpDown(); numOy.Minimum = 0; numOy.Maximum = 10000; numOy.Bounds = new Rectangle(382, 24, 70, 24);
+            numOy.ValueChanged += delegate { if (loading) return; cfg.OverlayY = (int)numOy.Value; cfg.Save(); };
+            gApm.Controls.Add(numOy);
+            Label lNote = new Label(); lNote.Text = "统计最近60秒键盘+鼠标操作数";
+            lNote.Bounds = new Rectangle(470, 28, 210, 20);
+            lNote.ForeColor = Color.DimGray;
+            gApm.Controls.Add(lNote);
+
+            GroupBox gRem = new GroupBox();
+            gRem.Text = "计时提醒 (打野/神符等周期提醒)";
+            gRem.Bounds = new Rectangle(12, 80, 690, 300);
+            tp.Controls.Add(gRem);
+
+            lvRem = new ListView();
+            lvRem.View = View.Details;
+            lvRem.FullRowSelect = true;
+            lvRem.CheckBoxes = true;
+            lvRem.HideSelection = false;
+            lvRem.Bounds = new Rectangle(14, 24, 660, 170);
+            lvRem.Columns.Add("启用/名称", 220);
+            lvRem.Columns.Add("间隔(秒)", 100);
+            lvRem.ItemChecked += delegate(object s, ItemCheckedEventArgs e)
+            {
+                if (loading) return;
+                int i = e.Item.Index;
+                if (i >= 0 && i < cfg.Reminders.Count)
+                {
+                    cfg.Reminders[i].Enabled = e.Item.Checked;
+                    cfg.Save();
+                }
+            };
+            gRem.Controls.Add(lvRem);
+
+            Label lrn = new Label(); lrn.Text = "名称:"; lrn.Bounds = new Rectangle(14, 208, 40, 20);
+            gRem.Controls.Add(lrn);
+            txtRemName = new TextBox(); txtRemName.Bounds = new Rectangle(56, 204, 120, 24);
+            gRem.Controls.Add(txtRemName);
+            Label lrs = new Label(); lrs.Text = "间隔秒:"; lrs.Bounds = new Rectangle(190, 208, 50, 20);
+            gRem.Controls.Add(lrs);
+            numRemSec = new NumericUpDown(); numRemSec.Minimum = 5; numRemSec.Maximum = 3600; numRemSec.Value = 120;
+            numRemSec.Bounds = new Rectangle(242, 204, 70, 24);
+            gRem.Controls.Add(numRemSec);
+
+            Button bRemAdd = new Button(); bRemAdd.Text = "添加"; bRemAdd.Bounds = new Rectangle(324, 202, 60, 27);
+            bRemAdd.Click += delegate
+            {
+                if (string.IsNullOrEmpty(txtRemName.Text)) return;
+                Reminder r = new Reminder(); r.Name = txtRemName.Text; r.Interval = (int)numRemSec.Value; r.Enabled = true;
+                cfg.Reminders.Add(r);
+                txtRemName.Text = "";
+                ReloadReminders();
+                cfg.Save();
+            };
+            gRem.Controls.Add(bRemAdd);
+
+            Button bRemDel = new Button(); bRemDel.Text = "删除选中"; bRemDel.Bounds = new Rectangle(392, 202, 80, 27);
+            bRemDel.Click += delegate
+            {
+                if (lvRem.SelectedIndices.Count == 0) return;
+                cfg.Reminders.RemoveAt(lvRem.SelectedIndices[0]);
+                ReloadReminders();
+                cfg.Save();
+            };
+            gRem.Controls.Add(bRemDel);
+
+            Label lwa = new Label(); lwa.Text = "提前提醒秒数:"; lwa.Bounds = new Rectangle(520, 208, 90, 20);
+            gRem.Controls.Add(lwa);
+            numWarn = new NumericUpDown(); numWarn.Minimum = 3; numWarn.Maximum = 60;
+            numWarn.Bounds = new Rectangle(610, 204, 60, 24);
+            numWarn.ValueChanged += delegate { if (loading) return; cfg.WarnAhead = (int)numWarn.Value; cfg.Save(); };
+            gRem.Controls.Add(numWarn);
+
+            Label lrHint = new Label();
+            lrHint.Text = "用法: 游戏正式开始的瞬间按 Ctrl+F8 开始计时（再按重新计时），悬浮窗会显示游戏时间，\r\n" +
+                          "到达每个周期前提前N秒开始倒数并蜂鸣提醒。也可从局内悬浮图标菜单里开始/停止。";
+            lrHint.Bounds = new Rectangle(14, 240, 660, 46);
+            lrHint.ForeColor = Color.DimGray;
+            gRem.Controls.Add(lrHint);
+        }
+
+        void BuildTabHelp(TabPage tp)
+        {
+            TextBox t = new TextBox();
+            t.Multiline = true;
+            t.ReadOnly = true;
+            t.ScrollBars = ScrollBars.Vertical;
+            t.Dock = DockStyle.Fill;
+            t.Font = new Font("Microsoft YaHei UI", 9.5F);
+            t.Text =
+"WSH魔兽助手 — U9WSH(魔兽超级助手)复刻增强版\r\n" +
+"================================================\r\n\r\n" +
+"【全局热键】(魔兽窗口前台时生效)\r\n" +
+"  Ctrl+F2   改键开/关\r\n" +
+"  Ctrl+F3   切换到下一个改键方案\r\n" +
+"  Ctrl+F4   鼠标锁定开/关\r\n" +
+"  Ctrl+F5   血条/蓝条常显 开/关\r\n" +
+"  Ctrl+F7   APM悬浮窗开/关\r\n" +
+"  Ctrl+F8   计时提醒 开始/重新计时\r\n" +
+"  老板键     默认Pause，任何时候可用，隐藏/恢复魔兽窗口\r\n\r\n" +
+"【局内悬浮图标】\r\n" +
+"  游戏运行时左上角会出现一个半透明图标：拖动可移位置，单击弹出分级菜单，\r\n" +
+"  不用切出游戏就能改方案、开关血条/APM、开始计时、伪全屏、发喊话、打开录像目录。\r\n" +
+"  需要窗口化或无边框全屏模式（独占全屏下任何悬浮窗都无法显示）。\r\n\r\n" +
+"【改键】\r\n" +
+"  · 物品栏快捷键: 把顺手的键映射到小键盘 7 8 4 5 1 2 (魔兽物品栏6格)。\r\n" +
+"  · 自定义改键: 任意键→任意键，支持鼠标中键/侧键/滚轮，也支持键盘键→鼠标左右键。\r\n" +
+"  · 多方案: 不同地图用不同方案，游戏中 Ctrl+F3 或悬浮菜单一键切换。\r\n" +
+"  · 改键只在魔兽窗口激活时生效，切出游戏自动失效。\r\n\r\n" +
+"【快捷喊话】\r\n" +
+"  按热键自动完成: 回车→输入文本→回车，支持中文和组合键(Ctrl/Alt/Shift)。\r\n" +
+"  已内置DOTA常用命令，默认绑到 Alt+1 ~ Alt+0:\r\n" +
+"    Alt+1 -aphehg   Alt+2 -apemhg  Alt+3 -arem    Alt+4 -test   Alt+5 -ii\r\n" +
+"    Alt+6 -di       Alt+7 -ma      Alt+8 -cson    Alt+9 -random Alt+0 -repick\r\n\r\n" +
+"【血条/蓝条常显】\r\n" +
+"  自动替你按住 Alt —— 魔兽按住Alt会显示所有单位血条，DOTA等地图同时显示蓝条。\r\n" +
+"  你一操作就自动松开(不会误发Alt+点击信号)，停手0.3秒后自动按回。\r\n" +
+"  不注入游戏、不改游戏文件，因此没有封号风险，也兼容任何版本。\r\n" +
+"  另外可一并开启游戏自带的\"始终显示生命条\"选项(写注册表)。\r\n\r\n" +
+"【版本切换】\r\n" +
+"  扫描版本包目录里的 版本X.zip，一键切换魔兽版本。\r\n" +
+"  换出前会把当前版本全部相关文件快照到 VersionStore\\<版本>\\，随时可切回来。\r\n" +
+"  也支持从网址下载新的版本包。切换前必须完全退出魔兽。\r\n\r\n" +
+"【录像】\r\n" +
+"  每局结束自动备份 LastReplay.w3g 到 Replay\\AutoSave，文件名含日期与时长。\r\n" +
+"  录像页可浏览全部录像(时长/大小/时间)、播放、重命名、删除(移入回收站)。\r\n\r\n" +
+"【与原版U9WSH的差异】\r\n" +
+"  本工具用系统级按键钩子实现，不注入游戏进程、不读写游戏内存:\r\n" +
+"  · 兼容任意魔兽版本(1.20~1.28)，切换版本无需更新助手，无封号风险。\r\n" +
+"  · 原版靠内存注入的 AI一键操作指令、JASS脚本引擎 未包含。\r\n" +
+"  · 原版的显血显蓝靠内存补丁(原版自己也提示有封号风险)，本工具改用Alt方案。\r\n\r\n" +
+"【提示】\r\n" +
+"  · 关闭窗口 = 最小化到托盘继续工作，托盘右键→退出 才是真正退出。\r\n" +
+"  · 如按键映射后游戏无反应，请把本助手也以管理员身份运行。\r\n" +
+"  · 配置保存在助手目录 config.json，可随意备份/复制到其他电脑。\r\n";
+            tp.Controls.Add(t);
+        }
+
+        // ================= 版本切换 =================
+        void ReloadVersions()
+        {
+            string cur = War3Version.DetectInstalledVersion(cfg.War3Path);
+            versionPkgs = War3Version.Scan(cfg.VerSourceDir, cfg.War3Path);
+            string matched = null;
+            foreach (VersionPackage p in versionPkgs) if (p.Installed) matched = p.Name;
+            lblCurVer.Text = "当前安装版本: " + cur +
+                (matched != null ? "   (匹配版本包: " + matched + ")" : "   (未在版本包中找到对应项)");
+            currentLabel = War3Version.CurrentLabel(cfg.War3Path, versionPkgs);
+
+            lvVersions.Items.Clear();
+            foreach (VersionPackage p in versionPkgs)
+            {
+                ListViewItem it = new ListViewItem(p.Name);
+                string state = p.Installed ? "● 当前版本"
+                    : (War3Version.HasSnapshot(cfg.War3Path, p.Name) ? "已快照，可切换" : "可切换");
+                it.SubItems.Add(state);
+                it.SubItems.Add(string.Format("{0:n1} MB", p.Size / 1048576.0));
+                it.SubItems.Add(Path.GetFileName(p.ZipPath));
+                it.Tag = p;
+                if (p.Installed) it.Font = new Font(lvVersions.Font, FontStyle.Bold);
+                lvVersions.Items.Add(it);
+            }
+            if (versionPkgs.Count == 0)
+                lblVerStatus.Text = "版本包目录里没有找到 .zip 版本包。可以指向 war3ver 的 ver 目录，或用下载按钮获取。";
+            else
+                lblVerStatus.Text = string.Format("找到 {0} 个版本包。", versionPkgs.Count);
+        }
+
+        void SetVersionBusy(bool busy)
+        {
+            btnSwitch.Enabled = !busy;
+            btnDownload.Enabled = !busy;
+            lvVersions.Enabled = !busy;
+        }
+
+        void DoSwitchVersion()
+        {
+            if (lvVersions.SelectedItems.Count == 0) { MessageBox.Show(this, "请先选中一个版本"); return; }
+            VersionPackage p = lvVersions.SelectedItems[0].Tag as VersionPackage;
+            if (p == null) return;
+            if (p.Installed) { MessageBox.Show(this, "已经是当前版本了。"); return; }
+            if (War3Version.War3Running())
+            {
+                MessageBox.Show(this, "魔兽正在运行，请先完全退出游戏（包括对战平台里的魔兽）再切换版本。",
+                    "无法切换", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string cur = currentLabel;
+            if (MessageBox.Show(this,
+                "即将把魔兽从 " + War3Version.DetectInstalledVersion(cfg.War3Path) +
+                " 切换到 " + p.Name + "。\r\n\r\n" +
+                "· 当前版本的全部相关文件会先快照到 VersionStore\\" + cur + "\\\r\n" +
+                "· 然后应用 " + Path.GetFileName(p.ZipPath) + "\r\n" +
+                "· 过程中请勿启动魔兽\r\n\r\n继续？",
+                "确认切换版本", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+
+            SetVersionBusy(true);
+            barVer.Value = 0;
+            List<VersionPackage> all = versionPkgs;
+            string war3 = cfg.War3Path;
+            ThreadPool.QueueUserWorkItem(delegate(object o)
+            {
+                string err = War3Version.SwitchTo(war3, p, cur, all,
+                    delegate(string msg, int pct)
+                    {
+                        try
+                        {
+                            BeginInvoke((Action)delegate
+                            {
+                                lblVerStatus.Text = msg;
+                                barVer.Value = Math.Max(0, Math.Min(100, pct));
+                            });
+                        }
+                        catch { }
+                    });
+                try
+                {
+                    BeginInvoke((Action)delegate
+                    {
+                        SetVersionBusy(false);
+                        if (err == null)
+                        {
+                            barVer.Value = 100;
+                            lblVerStatus.Text = "切换完成，当前版本: " + War3Version.DetectInstalledVersion(war3);
+                            MessageBox.Show(this, "版本切换完成！\r\n当前版本: " +
+                                War3Version.DetectInstalledVersion(war3), "完成");
+                        }
+                        else
+                        {
+                            barVer.Value = 0;
+                            lblVerStatus.Text = err.Replace("\r\n", " ");
+                            MessageBox.Show(this, err, "切换失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+                        ReloadVersions();
+                    });
+                }
+                catch { }
+            });
+        }
+
+        void DoDownloadVersion()
+        {
+            string url = Prompt("版本包下载地址 (直链 .zip):", "");
+            if (string.IsNullOrEmpty(url)) return;
+            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(this, "请填写 http:// 或 https:// 开头的直链地址");
+                return;
+            }
+            string ver = Prompt("这个包是哪个版本？(如 1.26):", "");
+            if (string.IsNullOrEmpty(ver)) return;
+
+            string dir = cfg.VerSourceDir;
+            SetVersionBusy(true);
+            barVer.Value = 0;
+            ThreadPool.QueueUserWorkItem(delegate(object o)
+            {
+                string saved;
+                string err = War3Version.Download(url, dir, ver,
+                    delegate(string msg, int pct)
+                    {
+                        try
+                        {
+                            BeginInvoke((Action)delegate
+                            {
+                                lblVerStatus.Text = msg;
+                                barVer.Value = Math.Max(0, Math.Min(100, pct));
+                            });
+                        }
+                        catch { }
+                    }, out saved);
+                try
+                {
+                    BeginInvoke((Action)delegate
+                    {
+                        SetVersionBusy(false);
+                        if (err == null)
+                        {
+                            VersionSource vs = new VersionSource(); vs.Name = ver; vs.Url = url;
+                            cfg.VersionSources.RemoveAll(delegate(VersionSource x) { return x.Name == ver; });
+                            cfg.VersionSources.Add(vs);
+                            cfg.Save();
+                            lblVerStatus.Text = "已下载: " + Path.GetFileName(saved);
+                        }
+                        else
+                        {
+                            barVer.Value = 0;
+                            lblVerStatus.Text = err;
+                            MessageBox.Show(this, err, "下载失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+                        ReloadVersions();
+                    });
+                }
+                catch { }
+            });
+        }
+
+        // ================= 数据加载 =================
+        void LoadCfgToUi()
+        {
+            chkRemap.Checked = cfg.RemapEnabled;
+            chkCombo.Checked = cfg.ApplyToCombo;
+            chkWin.Checked = cfg.BlockWinKey;
+            chkChat.Checked = cfg.ChatEnabled;
+            chkLock.Checked = cfg.AutoLockMouse;
+            chkReplay.Checked = cfg.AutoSaveReplay;
+            chkIgnoreShort.Checked = cfg.IgnoreShortReplay;
+            chkApm.Checked = cfg.ShowApm;
+            chkOpenGL.Checked = cfg.UseOpenGL;
+            chkHpBars.Checked = cfg.ShowHpBars;
+            chkAlwaysBars.Checked = cfg.AlwaysHealthBars;
+            chkIcon.Checked = cfg.InGameIcon;
+            txtPath.Text = cfg.War3Path;
+            txtVerDir.Text = cfg.VerSourceDir;
+            cmbLaunch.SelectedIndex = cfg.LaunchModeValue;
+            cmbRes.Text = cfg.WinW + "x" + cfg.WinH;
+            cmbRes.Enabled = (cfg.Launch == LaunchMode.Windowed);
+            numOx.Value = Math.Max(0, Math.Min(10000, cfg.OverlayX));
+            numOy.Value = Math.Max(0, Math.Min(10000, cfg.OverlayY));
+            numWarn.Value = Math.Max(3, Math.Min(60, cfg.WarnAhead));
+            capBoss.Vk = cfg.BossKey;
+            trackOpacity.Value = cfg.OpacityPercent;
+            trackIconOpacity.Value = cfg.IconOpacity;
+            Opacity = cfg.OpacityPercent / 100.0;
+            ReloadSchemeList();
+            ReloadChats();
+            ReloadReminders();
+            ReloadReplays();
+            ReloadVersions();
+        }
+
+        void ReloadSchemeList()
+        {
+            bool old = loading; loading = true;
+            cmbSchemes.Items.Clear();
+            foreach (Scheme s in cfg.Schemes) cmbSchemes.Items.Add(s.Name);
+            cmbSchemes.SelectedIndex = cfg.CurrentScheme;
+            loading = old;
+            ReloadSchemeUi();
+        }
+
+        void ReloadSchemeUi()
+        {
+            bool old = loading; loading = true;
+            for (int i = 0; i < 6; i++) capItems[i].Vk = cfg.ActiveScheme.ItemKeys[i];
+            loading = old;
+            ReloadMaps();
+        }
+
+        void ReloadMaps()
+        {
+            lvMaps.Items.Clear();
+            foreach (KeyMapEntry e in cfg.ActiveScheme.Maps)
+            {
+                ListViewItem it = new ListViewItem(KeyNames.Name(e.Src));
+                it.SubItems.Add(KeyNames.Name(e.Dst));
+                lvMaps.Items.Add(it);
+            }
+        }
+
+        void ReloadChats()
+        {
+            bool old = loading; loading = true;
+            lvChats.Items.Clear();
+            foreach (ChatItem c in cfg.Chats)
+            {
+                string hk = c.Key == 0 ? "(未设)" : Mods.Label(c.Mods) + KeyNames.Name(c.Key);
+                ListViewItem it = new ListViewItem(hk);
+                it.SubItems.Add(c.Text);
+                it.SubItems.Add(c.Note == null ? "" : c.Note);
+                if (c.Key == 0) it.ForeColor = Color.Gray;
+                lvChats.Items.Add(it);
+            }
+            loading = old;
+        }
+
+        void ReloadReminders()
+        {
+            bool old = loading; loading = true;
+            lvRem.Items.Clear();
+            foreach (Reminder r in cfg.Reminders)
+            {
+                ListViewItem it = new ListViewItem(r.Name);
+                it.SubItems.Add(r.Interval.ToString());
+                it.Checked = r.Enabled;
+                lvRem.Items.Add(it);
+            }
+            loading = old;
+        }
+
+        void ReloadReplays()
+        {
+            if (lvReplays == null) return;
+            lvReplays.BeginUpdate();
+            lvReplays.Items.Clear();
+            try
+            {
+                foreach (ReplayInfo r in War3Ctl.ListReplays(cfg.War3Path))
+                {
+                    ListViewItem it = new ListViewItem(r.Name);
+                    it.SubItems.Add(r.DurationText);
+                    it.SubItems.Add(r.SizeText);
+                    it.SubItems.Add(r.Time.ToString("yyyy-MM-dd HH:mm"));
+                    it.SubItems.Add(r.IsAutoSave ? "AutoSave" : "Replay");
+                    it.Tag = r;
+                    lvReplays.Items.Add(it);
+                }
+            }
+            catch { }
+            lvReplays.EndUpdate();
+        }
+
+        void SaveRebuild()
+        {
+            cfg.Save();
+            Engine.Rebuild();
+        }
+
+        void ApplyReplayWatcher()
+        {
+            if (replayWatcher == null) return;
+            replayWatcher.IgnoreShort = cfg.IgnoreShortReplay;
+            if (Directory.Exists(cfg.War3Path)) replayWatcher.Start(cfg.War3Path);
+            else replayWatcher.Stop();
+            if (!cfg.AutoSaveReplay) replayWatcher.Stop();
+        }
+
+        // ================= 托盘 =================
+        void SetupTray()
+        {
+            tray = new NotifyIcon();
+            tray.Icon = IconGen.TrayIcon();
+            tray.Text = "WSH魔兽助手";
+            tray.Visible = true;
+            ContextMenuStrip menu = new ContextMenuStrip();
+            menu.Font = new Font("Microsoft YaHei UI", 9F);
+            menu.Items.Add("显示主界面", null, delegate { RestoreFromTray(); });
+            menu.Items.Add("启动魔兽", null, delegate
+            {
+                string err = War3Ctl.Launch(cfg, cfg.Launch);
+                if (err != null) MessageBox.Show(err);
+            });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("打开录像目录", null, delegate { ActOpenReplayDir(); });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("退出", null, delegate { ActExit(); });
+            tray.ContextMenuStrip = menu;
+            tray.DoubleClick += delegate { RestoreFromTray(); };
+        }
+
+        void RestoreFromTray()
+        {
+            Show();
+            WindowState = FormWindowState.Normal;
+            Activate();
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (!reallyExit && e.CloseReason == CloseReason.UserClosing)
+            {
+                e.Cancel = true;
+                Hide();
+                tray.ShowBalloonTip(1500, "WSH助手", "已最小化到托盘，改键继续生效。右键托盘图标可退出。", ToolTipIcon.Info);
+                return;
+            }
+            cfg.Save();
+            Engine.Uninstall();
+            War3Ctl.ReleaseClip();
+            Native.UnregisterHotKey(Handle, HOTKEY_BOSS);
+            if (iconForm != null) { iconForm.Hide(); iconForm.Dispose(); }
+            if (tray != null) { tray.Visible = false; tray.Dispose(); }
+            base.OnFormClosing(e);
+        }
+
+        static string Prompt(string title, string defVal)
+        {
+            Form f = new Form();
+            f.Text = title;
+            f.FormBorderStyle = FormBorderStyle.FixedDialog;
+            f.ClientSize = new Size(380, 96);
+            f.StartPosition = FormStartPosition.CenterParent;
+            f.MinimizeBox = f.MaximizeBox = false;
+            f.Font = new Font("Microsoft YaHei UI", 9F);
+            f.Icon = IconGen.AppIcon();
+            TextBox tb = new TextBox();
+            tb.Bounds = new Rectangle(12, 12, 356, 24);
+            tb.Text = defVal;
+            f.Controls.Add(tb);
+            Button ok = new Button(); ok.Text = "确定"; ok.DialogResult = DialogResult.OK;
+            ok.Bounds = new Rectangle(200, 52, 80, 30);
+            f.Controls.Add(ok);
+            Button cancel = new Button(); cancel.Text = "取消"; cancel.DialogResult = DialogResult.Cancel;
+            cancel.Bounds = new Rectangle(288, 52, 80, 30);
+            f.Controls.Add(cancel);
+            f.AcceptButton = ok;
+            f.CancelButton = cancel;
+            Util.DpiScale(f);
+            return f.ShowDialog() == DialogResult.OK ? tb.Text.Trim() : null;
+        }
+    }
+}

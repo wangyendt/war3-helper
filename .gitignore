@@ -1,0 +1,17 @@
+# 编译产物（build.ps1 可完整重新生成，不入库）
+bin/
+obj/
+*.exe
+*.dll
+*.pdb
+*.ico
+
+# 用户配置：含本机路径、窗口位置、个人改键方案，不应共享
+config.json
+
+# 编辑器 / 系统
+.vs/
+*.user
+*.suo
+Thumbs.db
+desktop.ini
