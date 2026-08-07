@@ -310,14 +310,38 @@ static class EngineTests
         s.ItemKeys[0] = (int)'1';
         Engine.Rebuild();
 
-        // --- 3f) 滚轮必须松开血条常显按住的 Alt ---
-        // 漏掉滚轮的话，滚轮改键发出的键变成 Alt+键（Alt+7 选不中编队），
-        // 商店根本没被选上，接着按 S 自然买不到东西。
-        Console.WriteLine("\n[3f] wheel must release the synthetic Alt too");
-        Check(Engine.ReleasesBars(Native.WM_MOUSEWHEEL), "wheel releases the held Alt (was missing)");
-        Check(Engine.ReleasesBars(Native.WM_LBUTTONDOWN), "left click still releases it");
-        Check(Engine.ReleasesBars(Native.WM_XBUTTONDOWN), "side button still releases it");
-        Check(!Engine.ReleasesBars(Native.WM_MOUSEMOVE), "plain movement does not (bars would never show)");
+        // --- 3f) 助手绝不能再自己按住 Alt ---
+        // 血条常显以前靠一直按住 Alt，副作用太大：按 F4 就成了 Alt+F4 直接关游戏、
+        // Alt+Enter 切全屏、Alt+点击在DOTA里是发信号、改键注入的键也全带上 Alt
+        // （滚轮改键本该发 7 实际发 Alt+7，编队选不中）。现在改用魔兽自己的设置。
+        Console.WriteLine("\n[3f] the helper must never hold Alt down itself");
+        cfg.CurrentScheme = 0;
+        cfg.ItemKeySelectHeroFirst = true;
+        s.ItemKeys[0] = (int)'3';
+        Engine.Cfg = cfg;
+        Engine.Rebuild();
+        Engine.ResetItemPressTimes();
+        Engine.IsPhysicallyHeld = delegate(int vk) { return false; };
+        Engine.BeginRecord();
+        Engine.EmitMappedForTest((int)'3', cfg.ActiveScheme.ItemSlotDst[0], true, false);
+        int[] emitted = Engine.EndRecord();
+        bool anyAlt = false;
+        foreach (int e in emitted)
+        {
+            int vk = e < 0 ? -e : e;
+            if (vk == 0x12 || vk == 0xA4 || vk == 0xA5) anyAlt = true;
+        }
+        Check(!anyAlt, "no Alt anywhere in what the helper injects");
+        Engine.IsPhysicallyHeld = delegate(int vk) { return (Native.GetAsyncKeyState(vk) & 0x8000) != 0; };
+        Engine.ResetItemPressTimes();
+        cfg.ItemKeySelectHeroFirst = false;
+        s.ItemKeys[0] = (int)'1';
+        Engine.Rebuild();
+
+        // 读游戏自己的"生命条"设置：只读，不写(不动玩家的注册表)
+        bool threw = false;
+        try { War3Ctl.GetAlwaysHealthBars(); } catch { threw = true; }
+        Check(!threw, "reading the game's own healthbars setting never throws");
 
         // --- 4) 喊话热键表(组合键) ---
         Console.WriteLine("\n[4] chat hotkey table");

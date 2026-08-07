@@ -115,7 +115,8 @@ namespace War3Helper
         // 窗口页
         TextBox txtPath;
         ComboBox cmbRes, cmbLaunch;
-        CheckBox chkOpenGL, chkLock, chkHpBars, chkAlwaysBars, chkIcon;
+        CheckBox chkOpenGL, chkLock, chkAlwaysBars, chkIcon;
+        bool _barsOn;
         CaptureBox capBoss;
         TrackBar trackOpacity, trackIconOpacity;
         // 录像页
@@ -175,7 +176,6 @@ namespace War3Helper
             Engine.HotToggleRemap += delegate { BeginInvoke((Action)ActToggleRemap); };
             Engine.HotNextScheme += delegate { BeginInvoke((Action)NextSchemeHot); };
             Engine.HotToggleLock += delegate { BeginInvoke((Action)ActToggleLock); };
-            Engine.HotToggleBars += delegate { BeginInvoke((Action)ActToggleHpBars); };
             Engine.HotToggleApm += delegate { BeginInvoke((Action)ActToggleApm); };
             Engine.HotTimerReset += delegate { BeginInvoke((Action)ActStartTimer); };
             Engine.ShopModeChanged += delegate
@@ -200,7 +200,13 @@ namespace War3Helper
 
             SetupTray();
             RegisterBoss();
-            War3Ctl.SetAlwaysHealthBars(cfg.AlwaysHealthBars);
+            // 启动时只在游戏没开着的时候补写一次。游戏开着时写了也会被它退出时覆盖，
+            // 而且玩家可能刚在游戏里自己改过，不该被我们无条件盖掉。
+            if (cfg.AlwaysHealthBars && !War3Ctl.GetAlwaysHealthBars())
+            {
+                string barErr;
+                War3Ctl.SetAlwaysHealthBars(true, out barErr);
+            }
             War3Ctl.StartWindowCacheRefresher();   // 进程枚举放后台，别堵住UI线程上的钩子回调
 
             timerMain = new System.Windows.Forms.Timer();
@@ -274,12 +280,6 @@ namespace War3Helper
             overlay.FlashMessage(cfg.ShowApm ? "APM显示: 开" : "APM显示: 关", 1200);
         }
 
-        public void ActToggleHpBars()
-        {
-            chkHpBars.Checked = !chkHpBars.Checked;
-            overlay.FlashMessage(cfg.ShowHpBars ? "血条常显: 开" : "血条常显: 关", 1500);
-        }
-
         public void ActStartTimer() { overlay.ResetGameTimer(); }
 
         public void ActStopTimer()
@@ -338,7 +338,6 @@ namespace War3Helper
             if (tickCount % 3 == 0) Engine.InvalidateForegroundMemo();
             Engine.WatchdogTick();      // 钩子被系统摘掉时自动重装
             War3Ctl.MaintainClip(cfg.AutoLockMouse);
-            Engine.TickBars();
             if (tickCount % 7 == 0) Engine.TickNumLock();
             if (lblNumLock != null)
                 lblNumLock.Text = Engine.NumLockProblem
@@ -346,7 +345,9 @@ namespace War3Helper
                     : (Engine.MapsToNumpad ? "NumLock 已开启，物品栏改键可正常工作" : "");
             if (iconForm != null) iconForm.Sync();
             bool found = War3Ctl.CachedMainWindow() != IntPtr.Zero;
-            string bars = cfg.ShowHpBars ? (Engine.BarsActive ? "开(生效中)" : "开(待机)") : "关";
+            // 每 30 拍(约9秒)读一次注册表就够了，别每拍都读
+            if (tickCount % 30 == 1) _barsOn = War3Ctl.GetAlwaysHealthBars();
+            string bars = _barsOn ? "开" : "关";
             string hook = Engine.ReinstallCount > 0 ? "  钩子已自动重装" + Engine.ReinstallCount + "次" : "";
             lblStatus.Text = string.Format("魔兽: {0}    改键: {1}    方案: {2}    血条常显: {3}    老板键: {4}{5}",
                 found ? (Engine.War3Foreground() ? "游戏中" : "已找到") : "未运行",
@@ -1177,32 +1178,29 @@ namespace War3Helper
             tp.Controls.Add(gBars);
 
             chkAlwaysBars = new CheckBox();
-            chkAlwaysBars.Text = "开启游戏自带的\"始终显示生命条\"选项";
-            chkAlwaysBars.Bounds = new Rectangle(14, 24, 300, 22);
+            chkAlwaysBars.Text = "血条/蓝条常显（写入魔兽自带的\"生命条\"设置）";
+            chkAlwaysBars.Bounds = new Rectangle(14, 24, 320, 22);
             chkAlwaysBars.CheckedChanged += delegate
             {
                 if (loading) return;
+                string err;
+                if (!War3Ctl.SetAlwaysHealthBars(chkAlwaysBars.Checked, out err))
+                {
+                    // 写不进去就把勾选状态退回注册表里的真实值，别让界面撒谎
+                    MessageBox.Show(this, err, "血条常显", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    loading = true;
+                    chkAlwaysBars.Checked = War3Ctl.GetAlwaysHealthBars();
+                    loading = false;
+                    return;
+                }
                 cfg.AlwaysHealthBars = chkAlwaysBars.Checked;
-                War3Ctl.SetAlwaysHealthBars(cfg.AlwaysHealthBars);
                 cfg.Save();
             };
             gBars.Controls.Add(chkAlwaysBars);
 
-            chkHpBars = new CheckBox();
-            chkHpBars.Text = "血条/蓝条常显 (Ctrl+F5) — 自动保持Alt按下";
-            chkHpBars.Bounds = new Rectangle(330, 24, 350, 22);
-            chkHpBars.CheckedChanged += delegate
-            {
-                if (loading) return;
-                cfg.ShowHpBars = chkHpBars.Checked;
-                if (!cfg.ShowHpBars) Engine.ReleaseSynthAlt();
-                cfg.Save();
-            };
-            gBars.Controls.Add(chkHpBars);
-
             Label lBars = new Label();
-            lBars.Text = "常显原理：自动替你按住 Alt（War3 按住 Alt 会显示所有单位的血条，DOTA 等地图同时显示蓝条）。\r\n" +
-                         "你一操作就自动松开、停手约0.3秒后自动按回，因此不会误发 Alt+点击 信号，也不改动游戏任何文件。";
+            lBars.Text = "直接改魔兽自己的设置（注册表 Gameplay\\healthbars），等同于在游戏里 选项→游戏性 勾上\"生命条\"。\r\n" +
+                         "不注入游戏、不占用按键。魔兽退出时会把设置整个写回注册表，所以要先退出游戏再改，改完下次启动生效。";
             lBars.Bounds = new Rectangle(14, 50, 670, 40);
             lBars.ForeColor = Color.DimGray;
             gBars.Controls.Add(lBars);
@@ -1639,13 +1637,12 @@ namespace War3Helper
 "  Ctrl+F2   改键开/关\r\n" +
 "  Ctrl+F3   切换到下一个改键方案\r\n" +
 "  Ctrl+F4   鼠标锁定开/关\r\n" +
-"  Ctrl+F5   血条/蓝条常显 开/关\r\n" +
 "  Ctrl+F7   APM悬浮窗开/关\r\n" +
 "  Ctrl+F8   计时提醒 开始/重新计时\r\n" +
 "  老板键     默认Pause，任何时候可用，隐藏/恢复魔兽窗口\r\n\r\n" +
 "【局内悬浮图标】\r\n" +
 "  游戏运行时左上角会出现一个半透明图标：拖动可移位置，单击弹出分级菜单，\r\n" +
-"  不用切出游戏就能改方案、开关血条/APM、开始计时、伪全屏、发喊话、打开录像目录。\r\n" +
+"  不用切出游戏就能改方案、开关APM、开始计时、伪全屏、发喊话、打开录像目录。\r\n" +
 "  需要窗口化或无边框全屏模式（独占全屏下任何悬浮窗都无法显示）。\r\n\r\n" +
 "【改键】\r\n" +
 "  · 物品栏快捷键: 魔兽物品栏是2列x3行，默认对应小键盘左边两列(位置一一对应):\r\n" +
@@ -1701,10 +1698,12 @@ namespace War3Helper
 "  · \"注入方式\"改成\"只发扫描码\": 有些老游戏用DirectInput读键盘，只认扫描码。\r\n" +
 "  · \"重装钩子\": 手动重新挂接键鼠钩子。\r\n\r\n" +
 "【血条/蓝条常显】\r\n" +
-"  自动替你按住 Alt —— 魔兽按住Alt会显示所有单位血条，DOTA等地图同时显示蓝条。\r\n" +
-"  你一操作就自动松开(不会误发Alt+点击信号)，停手0.3秒后自动按回。\r\n" +
-"  不注入游戏、不改游戏文件，因此没有封号风险，也兼容任何版本。\r\n" +
-"  另外可一并开启游戏自带的\"始终显示生命条\"选项(写注册表)。\r\n\r\n" +
+"  直接改魔兽自己的设置(注册表 Gameplay\\healthbars)，等同于在游戏里\r\n" +
+"  选项→游戏性 勾上\"生命条\"。不注入游戏、不占用任何按键。\r\n" +
+"  魔兽退出时会把自己的设置整个写回注册表，所以要先退出游戏再改，下次启动生效。\r\n" +
+"  注: 旧版本用的是\"一直替你按住Alt\"，已经删掉了 —— 副作用太大:\r\n" +
+"      按F4就成了Alt+F4直接关游戏，Alt+Enter切全屏，Alt+点击在DOTA里是发信号，\r\n" +
+"      连改键注入的键都会带上Alt(滚轮改键本该发7、实际发Alt+7，编队根本选不中)。\r\n\r\n" +
 "【版本切换】\r\n" +
 "  扫描版本包目录里的 版本X.zip，一键切换魔兽版本。\r\n" +
 "  换出前会把当前版本全部相关文件快照到 VersionStore\\<版本>\\，随时可切回来。\r\n" +
@@ -1902,8 +1901,8 @@ namespace War3Helper
             chkIgnoreShort.Checked = cfg.IgnoreShortReplay;
             chkApm.Checked = cfg.ShowApm;
             chkOpenGL.Checked = cfg.UseOpenGL;
-            chkHpBars.Checked = cfg.ShowHpBars;
-            chkAlwaysBars.Checked = cfg.AlwaysHealthBars;
+            // 以注册表为准，不以我们自己的配置为准：玩家可能在游戏里自己改过
+            chkAlwaysBars.Checked = War3Ctl.GetAlwaysHealthBars();
             chkIcon.Checked = cfg.InGameIcon;
             chkHeroFirst.Checked = cfg.ItemKeySelectHeroFirst;
             chkStopAsHold.Checked = cfg.BuiltinStopAsHold;

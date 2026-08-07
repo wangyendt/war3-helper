@@ -105,8 +105,12 @@ namespace War3Helper
         public bool IgnoreShortReplay { get; set; }
         public bool ShowApm { get; set; }
         public bool UseOpenGL { get; set; }
-        public bool ShowHpBars { get; set; }        // 持续按住Alt显示血条/蓝条
-        public bool AlwaysHealthBars { get; set; }  // 注册表 healthbars 开关
+        // 血条常显。真实状态存在魔兽自己的注册表(Gameplay\healthbars)里，
+        // 这里只记录"助手启动时要不要帮忙补开"。
+        // 旧版还有个 ShowHpBars(一直按住Alt)，已删除 —— 副作用太大：
+        // 按 F4 变 Alt+F4 直接关游戏、Alt+Enter 切全屏、Alt+点击在DOTA里是发信号、
+        // 改键注入的键也全带上 Alt。
+        public bool AlwaysHealthBars { get; set; }
         public bool InGameIcon { get; set; }
         public bool ItemKeySelectHeroFirst { get; set; }   // 物品键先按F1选英雄
         public int SuspendKey { get; set; }                // 按住它时临时停用改键(0=未设)
@@ -346,7 +350,6 @@ namespace War3Helper
             IgnoreShortReplay = true;
             ShowApm = false;
             UseOpenGL = false;
-            ShowHpBars = false;
             AlwaysHealthBars = true;
             BossKey = 0x13; // Pause
             War3Path = FindWar3Dir();

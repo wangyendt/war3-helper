@@ -11,7 +11,6 @@ namespace War3Helper
         void ActToggleRemap();
         void ActSelectScheme(int index);
         void ActToggleApm();
-        void ActToggleHpBars();
         void ActStartTimer();
         void ActStopTimer();
         void ActToggleReminder(int index);
@@ -239,7 +238,7 @@ namespace War3Helper
             // --- 显示 ---
             ToolStripMenuItem mShow = new ToolStripMenuItem("显示");
             mShow.DropDownItems.Add(Item("APM 实时显示", Cfg.ShowApm, delegate { Actions.ActToggleApm(); }));
-            mShow.DropDownItems.Add(Item("血条/蓝条 常显", Cfg.ShowHpBars, delegate { Actions.ActToggleHpBars(); }));
+            // 血条常显走的是魔兽自己的设置，只能在游戏关闭时改，局内切不了
             m.Items.Add(mShow);
 
             // --- 计时 ---

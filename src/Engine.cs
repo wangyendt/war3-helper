@@ -64,7 +64,8 @@ namespace War3Helper
         public static event Action HotToggleRemap;      // Ctrl+F2
         public static event Action HotNextScheme;       // Ctrl+F3
         public static event Action HotToggleLock;       // Ctrl+F4
-        public static event Action HotToggleBars;       // Ctrl+F5
+        // Ctrl+F5(血条常显)已取消：血条常显改用魔兽自己的设置，只能在游戏关闭时改，
+        // 局内热键没有意义了。
         public static event Action HotToggleApm;        // Ctrl+F7
         public static event Action HotTimerReset;       // Ctrl+F8
 
@@ -82,8 +83,6 @@ namespace War3Helper
         static volatile bool _sendingChat = false;
 
         // 血条常显(合成Alt)状态
-        static volatile bool _synthAlt = false;
-        static uint _altResumeAt = 0;
 
         // 钩子存活计数（看门狗用）
         static int _msTicks = 0;
@@ -108,7 +107,6 @@ namespace War3Helper
 
         public static void Uninstall()
         {
-            ReleaseSynthAlt();
             if (_kbHook != IntPtr.Zero) { Native.UnhookWindowsHookEx(_kbHook); _kbHook = IntPtr.Zero; }
             if (_msHook != IntPtr.Zero) { Native.UnhookWindowsHookEx(_msHook); _msHook = IntPtr.Zero; }
         }
@@ -407,28 +405,9 @@ namespace War3Helper
             }
         }
 
-        // ---- 血条/蓝条常显：持续保持Alt按下 ----
-        public static bool BarsActive { get { return _synthAlt; } }
-
-        static void PressSynthAlt()
-        {
-            if (_synthAlt) return;
-            _synthAlt = true;
-            SendVk(VK_ALT, true);
-        }
-
-        public static void ReleaseSynthAlt()
-        {
-            if (!_synthAlt) return;
-            _synthAlt = false;
-            SendVk(VK_ALT, false);
-        }
-
-        static void SuspendBars()
-        {
-            _altResumeAt = (uint)Environment.TickCount + 350;
-            ReleaseSynthAlt();
-        }
+        // 血条常显已改用魔兽自己的设置（见 War3Prefs），不再合成 Alt。
+        // 按住 Alt 的副作用太大：F4 变 Alt+F4 直接关游戏、Alt+Enter 切全屏、
+        // Alt+点击 在DOTA里是发信号、改键注入的键也全带上 Alt。
 
         // ---- NumLock ----
         // 魔兽的物品栏快捷键是小键盘 7/8/4/5/1/2。NumLock 关闭时，这些键在系统层面
@@ -463,17 +442,6 @@ namespace War3Helper
             EnsureNumLock();
         }
 
-        public static void TickBars()
-        {
-            if (Cfg == null) return;
-            bool fg = War3Foreground();
-            bool want = Cfg.ShowHpBars && !_sendingChat && fg
-                        && !PhysAlt && !PhysCtrl && !PhysShift
-                        && (uint)Environment.TickCount >= _altResumeAt;
-            if (want) PressSynthAlt();
-            else if (!Cfg.ShowHpBars || !fg) ReleaseSynthAlt();
-        }
-
         // ================= 键盘钩子 =================
         static IntPtr KbProc(int nCode, IntPtr wParam, IntPtr lParam)
         {
@@ -501,7 +469,6 @@ namespace War3Helper
 
             if (!War3Foreground())
             {
-                if (_synthAlt) ReleaseSynthAlt();
                 if (_typing) SetTyping(false);
                 return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
             }
@@ -531,21 +498,17 @@ namespace War3Helper
             if (SuspendHeld)
                 return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
 
-            if (down && _synthAlt) SuspendBars();
-            else if (down) _altResumeAt = (uint)Environment.TickCount + 350;
-
             if (down && !repeat) CountApm();
 
             int mods = PhysMods;
 
-            // 控制热键 Ctrl+F2/F3/F4/F5/F7/F8
+            // 控制热键 Ctrl+F2/F3/F4/F7/F8
             if (down && PhysCtrl && !PhysAlt && !PhysShift)
             {
                 Action fired = null;
                 if (vk == 0x71) fired = HotToggleRemap;
                 else if (vk == 0x72) fired = HotNextScheme;
                 else if (vk == 0x73) fired = HotToggleLock;
-                else if (vk == 0x74) fired = HotToggleBars;
                 else if (vk == 0x76) fired = HotToggleApm;
                 else if (vk == 0x77) fired = HotTimerReset;
                 if (fired != null)
@@ -623,21 +586,12 @@ namespace War3Helper
         static readonly int[] SuppressibleMods = new int[] { 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5 };
         static readonly int[] _suppressBuf = new int[6];
 
-        static bool IsAltVk(int vk) { return vk == 0xA4 || vk == 0xA5 || vk == VK_ALT; }
-
         static int SuppressHeldModifiers()
         {
             int n = 0;
-            // 血条常显自己按住的 Alt 也要松开，否则注入的键全带 Alt。
-            // 但它绝不能进 _suppressBuf：SuspendBars 之后 _synthAlt 已经是 false，
-            // 谁再把 Alt 按回去就没人负责松开了，Alt 会一直卡住。
-            // 而且 GetAsyncKeyState 未必立刻反映刚注入的 Alt 抬起，所以要显式排除。
-            bool bars = _synthAlt;
-            if (bars) SuspendBars();
             for (int i = 0; i < SuppressibleMods.Length; i++)
             {
                 int vk = SuppressibleMods[i];
-                if (bars && IsAltVk(vk)) continue;
                 if (IsPhysicallyHeld(vk))
                 {
                     _suppressBuf[n++] = vk;
@@ -670,16 +624,6 @@ namespace War3Helper
         }
 
         // ================= 鼠标钩子 =================
-        // 哪些鼠标消息要先松开血条常显按住的 Alt。
-        // 滚轮必须在内：漏掉它的话滚轮改键发出去的键会变成 Alt+键
-        // （比如 Alt+7 选不中编队，商店根本没被选上，接着按 S 当然买不到东西）。
-        public static bool ReleasesBars(int msg)
-        {
-            return msg == Native.WM_LBUTTONDOWN || msg == Native.WM_RBUTTONDOWN ||
-                   msg == Native.WM_MBUTTONDOWN || msg == Native.WM_XBUTTONDOWN ||
-                   msg == Native.WM_MOUSEWHEEL;
-        }
-
         static IntPtr MsProc(int nCode, IntPtr wParam, IntPtr lParam)
         {
             if (nCode < 0) return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
@@ -708,13 +652,6 @@ namespace War3Helper
                 if (enterShopAfter) SetShopMode(true);
                 if (eatWheel) return new IntPtr(1);
                 return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
-            }
-
-            // 点击前先松开合成Alt，否则会变成 Alt+点击(在DOTA里是发信号)
-            if (ReleasesBars(msg))
-            {
-                if (_synthAlt) SuspendBars();
-                else _altResumeAt = (uint)Environment.TickCount + 350;
             }
 
             if (msg == Native.WM_LBUTTONDOWN || msg == Native.WM_RBUTTONDOWN) CountApm();
@@ -916,8 +853,6 @@ namespace War3Helper
         {
             if (_sendingChat) return;
             _sendingChat = true;
-            ReleaseSynthAlt();
-            _altResumeAt = (uint)Environment.TickCount + 3000;
 
             int enterDelay = Cfg != null ? Cfg.ChatEnterDelay : 150;
             int charDelay = Cfg != null ? Cfg.ChatCharDelay : 12;

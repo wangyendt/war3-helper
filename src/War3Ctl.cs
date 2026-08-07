@@ -172,15 +172,33 @@ namespace War3Helper
             catch { }
         }
 
-        // 游戏自带的"始终显示生命条"选项
-        public static void SetAlwaysHealthBars(bool on)
+        // 游戏自带的"始终显示生命条"选项。
+        //
+        // 这是实现血条常显的正确办法。以前还有一套"一直按住 Alt"的方案，已经删掉了：
+        // 按住 Alt 的副作用太大 —— 按 F4 就成了 Alt+F4 直接关游戏，Alt+Enter 切全屏，
+        // Alt+点击 在 DOTA 里是发信号，连改键注入的键都会带上 Alt
+        // （滚轮改键本该发 7，实际发 Alt+7，编队根本选不中）。
+        //
+        // 注意：魔兽退出时会把整个 Gameplay 键按自己内存里的状态重写一遍，
+        // 所以游戏开着的时候写进去也会被覆盖，必须先退出游戏。
+        public static bool SetAlwaysHealthBars(bool on, out string err)
         {
+            err = null;
+            // 真扫一遍进程，不用那个 1 秒刷新的缓存：这里只在勾选框和启动时调用，
+            // 不在钩子热路径上，宁可慢一点也要准。
+            if (War3Pids().Count > 0)
+            {
+                err = "魔兽正在运行。游戏退出时会把自己的设置整个写回注册表，" +
+                      "现在改了也会被覆盖 —— 请先退出魔兽再设置。";
+                return false;
+            }
             try
             {
                 using (RegistryKey k = Registry.CurrentUser.CreateSubKey(RegGameplay))
                     k.SetValue("healthbars", on ? 1 : 0, RegistryValueKind.DWord);
+                return true;
             }
-            catch { }
+            catch (Exception ex) { err = ex.Message; return false; }
         }
 
         public static bool GetAlwaysHealthBars()
@@ -346,7 +364,6 @@ namespace War3Helper
                     }
                 }
                 ReleaseClip();
-                Engine.ReleaseSynthAlt();
                 _bossHidden = _hiddenWindows.Count > 0;
                 return _bossHidden;
             }
