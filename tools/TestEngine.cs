@@ -251,6 +251,25 @@ static class EngineTests
         Check(Engine.ConsumeItemPress((int)'1'), "after the double-tap window it asks again");
         Engine.ResetItemPressTimes();
 
+        // --- 3d) 打字状态：回车开、回车/Esc 关 ---
+        // 聊天栏开着时还改键，打的字就会被换掉(空格变成小键盘2，字都打不出来)。
+        Console.WriteLine("\n[3d] typing detection");
+        Engine.ResetTyping();
+        Check(!Engine.Typing, "starts out not typing");
+        Engine.FeedTypingKeyForTest(0x0D);                  // 回车打开聊天栏
+        Check(Engine.Typing, "Enter opens the chat line");
+        Engine.FeedTypingKeyForTest((int)' ');              // 打字期间的空格
+        Check(Engine.Typing, "typing an ordinary key keeps the state");
+        Engine.FeedTypingKeyForTest(0x0D);                  // 回车发出去
+        Check(!Engine.Typing, "Enter again sends and closes it");
+        Engine.FeedTypingKeyForTest(0x0D);
+        Check(Engine.Typing, "Enter reopens");
+        Engine.FeedTypingKeyForTest(0x1B);                  // Esc 取消
+        Check(!Engine.Typing, "Esc cancels");
+        Engine.FeedTypingKeyForTest(0x1B);
+        Check(!Engine.Typing, "Esc when not typing changes nothing");
+        Engine.ResetTyping();
+
         // --- 4) 喊话热键表(组合键) ---
         Console.WriteLine("\n[4] chat hotkey table");
         string text;

@@ -101,7 +101,7 @@ namespace War3Helper
         CheckBox chkStopAsHold;
         ListView lvMaps;
         CaptureBox capSrc, capDst, capSuspend, capShopEnter, capShopExit;
-        CheckBox chkAutoNumLock, chkShopMode, chkShopWheel, chkBlockWheel, chkItemKeepShop;
+        CheckBox chkAutoNumLock, chkShopMode, chkShopWheel, chkBlockWheel, chkItemKeepShop, chkTyping;
         Label lblNumLock;
         ComboBox cmbSchemes, cmbInject;
         CheckBox chkDiag;
@@ -350,8 +350,9 @@ namespace War3Helper
             string hook = Engine.ReinstallCount > 0 ? "  钩子已自动重装" + Engine.ReinstallCount + "次" : "";
             lblStatus.Text = string.Format("魔兽: {0}    改键: {1}    方案: {2}    血条常显: {3}    老板键: {4}{5}",
                 found ? (Engine.War3Foreground() ? "游戏中" : "已找到") : "未运行",
-                Engine.ShopMode ? "商店模式(已挂起)"
-                    : (Engine.SuspendHeld ? "已临时停用" : (cfg.RemapEnabled ? "开" : "关")),
+                Engine.Typing ? "打字中(已暂停)"
+                    : (Engine.ShopMode ? "商店模式(已挂起)"
+                    : (Engine.SuspendHeld ? "已临时停用" : (cfg.RemapEnabled ? "开" : "关"))),
                 cfg.ActiveScheme.Name,
                 bars,
                 KeyNames.Name(cfg.BossKey),
@@ -469,14 +470,26 @@ namespace War3Helper
             };
             tp.Controls.Add(chkHeroFirst);
 
+            chkTyping = new CheckBox();
+            chkTyping.Text = "打字时暂停改键（按回车开聊天栏后自动识别）";
+            chkTyping.Bounds = new Rectangle(14, 198, 336, 22);
+            chkTyping.CheckedChanged += delegate
+            {
+                if (loading) return;
+                cfg.SuspendWhileTyping = chkTyping.Checked;
+                if (!cfg.SuspendWhileTyping) Engine.ResetTyping();
+                cfg.Save();
+            };
+            tp.Controls.Add(chkTyping);
+
             lblNumLock = new Label();
-            lblNumLock.Bounds = new Rectangle(14, 200, 336, 20);
+            lblNumLock.Bounds = new Rectangle(14, 224, 336, 20);
             lblNumLock.ForeColor = Color.FromArgb(180, 60, 0);
             tp.Controls.Add(lblNumLock);
 
             chkAutoNumLock = new CheckBox();
             chkAutoNumLock.Text = "自动开启 NumLock (物品栏改键必需)";
-            chkAutoNumLock.Bounds = new Rectangle(14, 220, 300, 22);
+            chkAutoNumLock.Bounds = new Rectangle(14, 244, 300, 22);
             chkAutoNumLock.CheckedChanged += delegate
             {
                 if (loading) return;
@@ -488,7 +501,7 @@ namespace War3Helper
 
             GroupBox gShop = new GroupBox();
             gShop.Text = "商店模式 (进商店时挂起全部改键)";
-            gShop.Bounds = new Rectangle(12, 246, 330, 130);
+            gShop.Bounds = new Rectangle(12, 270, 330, 160);
             tp.Controls.Add(gShop);
 
             chkShopMode = new CheckBox();
@@ -514,9 +527,30 @@ namespace War3Helper
             };
             gShop.Controls.Add(chkBlockWheel);
 
+            Label lwi = new Label();
+            lwi.Text = "滚轮最小间隔:";
+            lwi.Bounds = new Rectangle(14, 130, 92, 20);
+            gShop.Controls.Add(lwi);
+            numWheelGap = new NumericUpDown();
+            numWheelGap.Minimum = 0; numWheelGap.Maximum = 2000; numWheelGap.Increment = 50;
+            numWheelGap.Bounds = new Rectangle(108, 126, 64, 24);
+            numWheelGap.ValueChanged += delegate
+            {
+                if (loading) return;
+                cfg.WheelMinIntervalMs = (int)numWheelGap.Value;
+                Engine.ResetWheelThrottle();
+                cfg.Save();
+            };
+            gShop.Controls.Add(numWheelGap);
+            Label lwi2 = new Label();
+            lwi2.Text = "毫秒 (防一格触发两次)";
+            lwi2.Bounds = new Rectangle(178, 130, 150, 20);
+            lwi2.ForeColor = Color.DimGray;
+            gShop.Controls.Add(lwi2);
+
             chkItemKeepShop = new CheckBox();
             chkItemKeepShop.Text = "物品栏键仍生效";
-            chkItemKeepShop.Bounds = new Rectangle(200, 100, 130, 22);
+            chkItemKeepShop.Bounds = new Rectangle(190, 100, 130, 22);
             chkItemKeepShop.CheckedChanged += delegate
             {
                 if (loading) return;
@@ -565,10 +599,10 @@ namespace War3Helper
 
             Label lsus = new Label();
             lsus.Text = "或按住此键临时停用:";
-            lsus.Bounds = new Rectangle(14, 380, 140, 20);
+            lsus.Bounds = new Rectangle(14, 440, 140, 20);
             tp.Controls.Add(lsus);
             capSuspend = new CaptureBox();
-            capSuspend.Bounds = new Rectangle(156, 376, 100, 24);
+            capSuspend.Bounds = new Rectangle(156, 436, 100, 24);
             capSuspend.VkChanged += delegate
             {
                 if (loading) return;
@@ -579,7 +613,7 @@ namespace War3Helper
 
             GroupBox gScheme = new GroupBox();
             gScheme.Text = "改键方案 (Ctrl+F3 游戏中切换)";
-            gScheme.Bounds = new Rectangle(12, 408, 330, 100);
+            gScheme.Bounds = new Rectangle(12, 468, 330, 100);
             tp.Controls.Add(gScheme);
 
             cmbSchemes = new ComboBox();
@@ -696,33 +730,6 @@ namespace War3Helper
                 SaveRebuild();
             };
             gMaps.Controls.Add(bDelMap);
-
-            Label lwi = new Label();
-            lwi.Text = "滚轮最小间隔:";
-            lwi.Bounds = new Rectangle(14, 518, 90, 20);
-            tp.Controls.Add(lwi);
-            numWheelGap = new NumericUpDown();
-            numWheelGap.Minimum = 0; numWheelGap.Maximum = 2000; numWheelGap.Increment = 50;
-            numWheelGap.Bounds = new Rectangle(106, 514, 70, 24);
-            numWheelGap.ValueChanged += delegate
-            {
-                if (loading) return;
-                cfg.WheelMinIntervalMs = (int)numWheelGap.Value;
-                Engine.ResetWheelThrottle();
-                cfg.Save();
-            };
-            tp.Controls.Add(numWheelGap);
-            Label lwi2 = new Label();
-            lwi2.Text = "毫秒 (0=不限制)";
-            lwi2.Bounds = new Rectangle(182, 518, 110, 20);
-            tp.Controls.Add(lwi2);
-            Label lwi3 = new Label();
-            lwi3.Text = "有些鼠标一格刻度会连发好几次滚轮事件，\r\n" +
-                        "导致一次滚动触发两次改键。上滚下滚各自计时，\r\n" +
-                        "所以上滚紧接着下滚不会被拦。";
-            lwi3.Bounds = new Rectangle(14, 540, 336, 60);
-            lwi3.ForeColor = Color.DimGray;
-            tp.Controls.Add(lwi3);
 
             GroupBox gDiag = new GroupBox();
             gDiag.Text = "改键不生效时用这里排查";
@@ -1658,6 +1665,12 @@ namespace War3Helper
 "  · 自定义改键: 任意键→任意键，支持鼠标中键/侧键/滚轮，也支持键盘键→鼠标左右键。\r\n" +
 "  · 多方案: 不同地图用不同方案，游戏中 Ctrl+F3 或悬浮菜单一键切换。\r\n" +
 "  · 改键只在魔兽窗口激活时生效，切出游戏自动失效。\r\n\r\n" +
+"【打字时暂停改键】\r\n" +
+"  默认开启。按回车打开聊天栏后自动暂停改键，再按回车发送或按 Esc 取消后恢复，\r\n" +
+"  状态栏会显示\"打字中(已暂停)\"。否则打字时空格会被改成小键盘键，字都打不出来。\r\n" +
+"  聊天栏开没开游戏不会告诉外部程序，但这个状态完全由你自己的按键决定\r\n" +
+"  (回车开、回车发、Esc取消)，所以不用猜游戏状态也能准确跟踪。\r\n" +
+"  兜底: 状态卡住时 30 秒没按键会自动复位，切出游戏也会复位。\r\n\r\n" +
 "【快捷喊话】\r\n" +
 "  按热键自动完成: 回车→输入文本→回车，支持组合键(Ctrl/Alt/Shift)。\r\n" +
 "  已内置DOTA常用命令，默认绑到 Alt+1 ~ Alt+0:\r\n" +
@@ -1901,6 +1914,7 @@ namespace War3Helper
             capShopEnter.Vk = cfg.ShopEnterKey;
             capShopExit.Vk = cfg.ShopExitKey;
             chkBlockWheel.Checked = cfg.BlockWheelZoom;
+            chkTyping.Checked = cfg.SuspendWhileTyping;
             numWheelGap.Value = Math.Max(0, Math.Min(2000, cfg.WheelMinIntervalMs));
             chkItemKeepShop.Checked = cfg.ActiveScheme.ItemKeysKeepInShop;
             cmbInject.SelectedIndex = cfg.InjectMode;

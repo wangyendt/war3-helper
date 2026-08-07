@@ -120,6 +120,7 @@ namespace War3Helper
         public int ShopExitKey { get; set; }               // 恢复键(默认F1)
         public int HeroSelectKey { get; set; }             // 选中自己英雄的键(默认F1)
         public bool BuiltinStopAsHold { get; set; }        // 内置: S 键改为原地不动(H)
+        public bool SuspendWhileTyping { get; set; }       // 聊天栏打开时暂停改键
         public int ChatEnterDelay { get; set; }            // 回车后等待毫秒
         public int ChatCharDelay { get; set; }             // 每个字符间隔毫秒
         public int IconX { get; set; }
@@ -331,7 +332,7 @@ namespace War3Helper
             catch { }
         }
 
-        public const int CurrentConfigVersion = 6;
+        public const int CurrentConfigVersion = 7;
 
         public void SetDefaults()
         {
@@ -388,6 +389,7 @@ namespace War3Helper
             HeroSelectKey = 0x70;
             BlockWheelZoom = true;
             BuiltinStopAsHold = true;
+            SuspendWhileTyping = true;
             WheelMinIntervalMs = 300;
         }
 
@@ -517,6 +519,8 @@ namespace War3Helper
             // ConfigVersion 6: 滚轮最小间隔。0 是"不限制"的合法取值，所以不能靠范围校验补默认值，
             // 只能在这里给老配置补上。
             if (ConfigVersion < 6) WheelMinIntervalMs = 300;
+            // ConfigVersion 7: 打字时暂停改键
+            if (ConfigVersion < 7) SuspendWhileTyping = true;
             if (WheelMinIntervalMs < 0 || WheelMinIntervalMs > 2000) WheelMinIntervalMs = 300;
 
             // ConfigVersion 5:

@@ -285,6 +285,51 @@ namespace War3Helper
             return vk == 0x10 || vk == 0x11 || vk == 0x12 || (vk >= 0xA0 && vk <= 0xA5);
         }
 
+        // ---- 打字状态 ----
+        // 按回车打开聊天栏后，空格、数字这些键都是在输入文字，这时候还改键就会把
+        // 打的字变成别的键(比如空格变成小键盘2)。游戏不会告诉外部"聊天栏开着没"，
+        // 但这个状态完全由玩家自己的按键决定：回车开、回车发出去、Esc 取消，
+        // 所以不用猜游戏状态也能准确跟踪。
+        const int VK_RETURN = 0x0D;
+        const int VK_ESCAPE = 0x1B;
+        const int TypingIdleResetMs = 30000;   // 兜底：长时间没动静就复位，免得卡死在打字态
+
+        static volatile bool _typing;
+        static uint _typingLastKey;
+
+        public static bool Typing { get { return _typing; } }
+
+        public static event Action TypingChanged;
+
+        static void SetTyping(bool on)
+        {
+            if (_typing == on) return;
+            _typing = on;
+            _typingLastKey = (uint)Environment.TickCount;
+            Diag.Note(on ? "检测到打开聊天栏，改键已暂停" : "聊天栏已关闭，改键恢复");
+            Action h = TypingChanged;
+            if (h != null) { try { h(); } catch { } }
+        }
+
+        public static void ResetTyping() { SetTyping(false); }
+
+        // 仅供测试
+        public static void FeedTypingKeyForTest(int vk) { TrackTyping(vk); }
+
+        static void TrackTyping(int vk)
+        {
+            uint now = (uint)Environment.TickCount;
+            if (vk == VK_RETURN) { SetTyping(!_typing); _typingLastKey = now; return; }
+            if (vk == VK_ESCAPE) { if (_typing) SetTyping(false); return; }
+            if (_typing) _typingLastKey = now;
+        }
+
+        static void TickTypingTimeout()
+        {
+            if (!_typing) return;
+            if ((uint)Environment.TickCount - _typingLastKey > TypingIdleResetMs) SetTyping(false);
+        }
+
         // 是否正按住"临时停用改键"键
         public static bool SuspendHeld
         {
@@ -457,8 +502,19 @@ namespace War3Helper
             if (!War3Foreground())
             {
                 if (_synthAlt) ReleaseSynthAlt();
+                if (_typing) SetTyping(false);
                 return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
             }
+
+            // 打字期间(聊天栏开着)一律原样放行，否则空格会被改成小键盘键，字都打不出来
+            if (Cfg.SuspendWhileTyping)
+            {
+                if (down) TrackTyping(vk);
+                TickTypingTimeout();
+                if (_typing)
+                    return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
+            }
+            else if (_typing) SetTyping(false);
 
             // 商店模式的进入/退出键（在改键判断之前处理，这两个键本身照常放行）
             if (down && Cfg.ShopModeEnabled)
@@ -590,7 +646,7 @@ namespace War3Helper
             if (Native.ReadExtraInfo(lParam, Native.MouseExtraInfoOffset) == Native.InjectMagic)
                 return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
 
-            if (_sendingChat || Cfg == null || !War3Foreground())
+            if (_sendingChat || Cfg == null || !War3Foreground() || _typing)
                 return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
 
             // 滚轮进入商店模式。滚轮自己的改键属于触发键，ShopExempt 会让它一直生效。
