@@ -270,6 +270,55 @@ static class EngineTests
         Check(!Engine.Typing, "Esc when not typing changes nothing");
         Engine.ResetTyping();
 
+        // --- 3e) Shift+物品键：注入"选中英雄"前必须先松开修饰键 ---
+        // 否则游戏收到的是 Shift+F1，魔兽里那是"切换"选中状态，英雄反而被取消选中。
+        Console.WriteLine("\n[3e] hero-select must not inherit held modifiers");
+        cfg.CurrentScheme = 0;
+        cfg.ItemKeySelectHeroFirst = true;
+        cfg.HeroSelectKey = 0x70;                 // F1
+        s.ItemKeys[0] = (int)'3';                 // 物品1 用 '3' 触发
+        Engine.Cfg = cfg;
+        Engine.Rebuild();
+        int slotDst0 = cfg.ActiveScheme.ItemSlotDst[0];
+
+        // 没按修饰键：应当是 F1按下, F1抬起, 目标键按下
+        Engine.ResetItemPressTimes();
+        Engine.IsPhysicallyHeld = delegate(int vk) { return false; };
+        Engine.BeginRecord();
+        Engine.EmitMappedForTest((int)'3', slotDst0, true, false);
+        int[] plain = Engine.EndRecord();
+        Check(plain.Length == 3 && plain[0] == 0x70 && plain[1] == -0x70 && plain[2] == slotDst0,
+              "no modifier held -> F1 down, F1 up, item key down");
+
+        // 按住左Shift：F1 前后必须有 Shift抬起 / Shift按下
+        Engine.ResetItemPressTimes();
+        Engine.IsPhysicallyHeld = delegate(int vk) { return vk == 0xA0; };   // 左Shift
+        Engine.BeginRecord();
+        Engine.EmitMappedForTest((int)'3', slotDst0, true, false);
+        int[] withShift = Engine.EndRecord();
+        Check(withShift.Length == 5, "shift held -> 5 events (got " + withShift.Length + ")");
+        Check(withShift.Length == 5 && withShift[0] == -0xA0, "1st: releases the held Shift");
+        Check(withShift.Length == 5 && withShift[1] == 0x70 && withShift[2] == -0x70,
+              "2nd/3rd: plain F1 (no Shift attached)");
+        Check(withShift.Length == 5 && withShift[3] == 0xA0, "4th: puts Shift back");
+        Check(withShift.Length == 5 && withShift[4] == slotDst0,
+              "5th: item key still gets Shift (Shift+item = queue)");
+
+        Engine.IsPhysicallyHeld = delegate(int vk) { return (Native.GetAsyncKeyState(vk) & 0x8000) != 0; };
+        Engine.ResetItemPressTimes();
+        cfg.ItemKeySelectHeroFirst = false;
+        s.ItemKeys[0] = (int)'1';
+        Engine.Rebuild();
+
+        // --- 3f) 滚轮必须松开血条常显按住的 Alt ---
+        // 漏掉滚轮的话，滚轮改键发出的键变成 Alt+键（Alt+7 选不中编队），
+        // 商店根本没被选上，接着按 S 自然买不到东西。
+        Console.WriteLine("\n[3f] wheel must release the synthetic Alt too");
+        Check(Engine.ReleasesBars(Native.WM_MOUSEWHEEL), "wheel releases the held Alt (was missing)");
+        Check(Engine.ReleasesBars(Native.WM_LBUTTONDOWN), "left click still releases it");
+        Check(Engine.ReleasesBars(Native.WM_XBUTTONDOWN), "side button still releases it");
+        Check(!Engine.ReleasesBars(Native.WM_MOUSEMOVE), "plain movement does not (bars would never show)");
+
         // --- 4) 喊话热键表(组合键) ---
         Console.WriteLine("\n[4] chat hotkey table");
         string text;

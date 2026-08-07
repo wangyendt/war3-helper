@@ -122,6 +122,14 @@ namespace War3Helper
                 }
             }
 
+            // 商店模式常驻显示。之前只闪 1.8 秒，一眨眼就过去了，
+            // 出问题时根本分不清"改键挂起了"还是"改键还在生效"。
+            if (Engine.ShopMode)
+            {
+                sb.AppendLine("商店模式 · 改键已挂起");
+                anything = true;
+            }
+
             if (_flashUntil > now && !string.IsNullOrEmpty(_flashText))
             {
                 sb.AppendLine(_flashText);

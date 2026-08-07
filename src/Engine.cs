@@ -616,6 +616,42 @@ namespace War3Helper
 
         public static void ResetItemPressTimes() { _lastItemPress.Clear(); }
 
+        // 注入"选中英雄"时必须先把玩家按住的修饰键临时松开。
+        // 否则按 Shift+物品键 时，游戏收到的是 Shift+F1 —— 魔兽里那是"切换"选中状态，
+        // 英雄本来选着就被取消了。发完再按回去，后面的物品键照样带 Shift，
+        // Shift+物品(排队使用)不受影响。
+        static readonly int[] SuppressibleMods = new int[] { 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5 };
+        static readonly int[] _suppressBuf = new int[6];
+
+        static bool IsAltVk(int vk) { return vk == 0xA4 || vk == 0xA5 || vk == VK_ALT; }
+
+        static int SuppressHeldModifiers()
+        {
+            int n = 0;
+            // 血条常显自己按住的 Alt 也要松开，否则注入的键全带 Alt。
+            // 但它绝不能进 _suppressBuf：SuspendBars 之后 _synthAlt 已经是 false，
+            // 谁再把 Alt 按回去就没人负责松开了，Alt 会一直卡住。
+            // 而且 GetAsyncKeyState 未必立刻反映刚注入的 Alt 抬起，所以要显式排除。
+            bool bars = _synthAlt;
+            if (bars) SuspendBars();
+            for (int i = 0; i < SuppressibleMods.Length; i++)
+            {
+                int vk = SuppressibleMods[i];
+                if (bars && IsAltVk(vk)) continue;
+                if (IsPhysicallyHeld(vk))
+                {
+                    _suppressBuf[n++] = vk;
+                    SendVk(vk, false);
+                }
+            }
+            return n;
+        }
+
+        static void RestoreModifiers(int n)
+        {
+            for (int i = n - 1; i >= 0; i--) SendVk(_suppressBuf[i], true);
+        }
+
         // 发出改键结果。物品栏键可选先选中英雄，这样在商店/小兵被选中时
         // 也不会误买东西 —— 按下去永远作用在自己英雄身上。
         static void EmitMapped(int src, int dst, bool down, bool repeat)
@@ -624,14 +660,26 @@ namespace War3Helper
                 && ConsumeItemPress(src))
             {
                 int hero = Cfg.HeroSelectKey != 0 ? Cfg.HeroSelectKey : VK_F1;
+                int suppressed = SuppressHeldModifiers();
                 SendVk(hero, true);
                 SendVk(hero, false);
+                RestoreModifiers(suppressed);
             }
             uint r = SendVk(dst, down);
             Diag.Log(0, src, dst, down, true, true, r);
         }
 
         // ================= 鼠标钩子 =================
+        // 哪些鼠标消息要先松开血条常显按住的 Alt。
+        // 滚轮必须在内：漏掉它的话滚轮改键发出去的键会变成 Alt+键
+        // （比如 Alt+7 选不中编队，商店根本没被选上，接着按 S 当然买不到东西）。
+        public static bool ReleasesBars(int msg)
+        {
+            return msg == Native.WM_LBUTTONDOWN || msg == Native.WM_RBUTTONDOWN ||
+                   msg == Native.WM_MBUTTONDOWN || msg == Native.WM_XBUTTONDOWN ||
+                   msg == Native.WM_MOUSEWHEEL;
+        }
+
         static IntPtr MsProc(int nCode, IntPtr wParam, IntPtr lParam)
         {
             if (nCode < 0) return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
@@ -662,11 +710,8 @@ namespace War3Helper
                 return Native.CallNextHookEx(_msHook, nCode, wParam, lParam);
             }
 
-            bool anyDown = (msg == Native.WM_LBUTTONDOWN || msg == Native.WM_RBUTTONDOWN ||
-                            msg == Native.WM_MBUTTONDOWN || msg == Native.WM_XBUTTONDOWN);
-
             // 点击前先松开合成Alt，否则会变成 Alt+点击(在DOTA里是发信号)
-            if (anyDown)
+            if (ReleasesBars(msg))
             {
                 if (_synthAlt) SuspendBars();
                 else _altResumeAt = (uint)Environment.TickCount + 350;
@@ -738,9 +783,34 @@ namespace War3Helper
         }
 
         // ================= 输入合成 =================
+        // 测试接缝：录制模式下只记录要发的按键，不真的注入。
+        // 用来确定性地验证"发出去的按键顺序"，这类 bug(比如 Shift 没松开导致 Shift+F1)
+        // 光靠肉眼看代码很难发现。
+        static List<int> _recorded;
+
+        // 物理按键是否按住。测试里可替换，免得依赖真实键盘状态。
+        public static Func<int, bool> IsPhysicallyHeld =
+            delegate(int vk) { return (Native.GetAsyncKeyState(vk) & 0x8000) != 0; };
+
+        public static void BeginRecord() { _recorded = new List<int>(); }
+
+        // 返回录到的序列：正数=按下，负数=抬起
+        public static int[] EndRecord()
+        {
+            int[] r = (_recorded == null) ? new int[0] : _recorded.ToArray();
+            _recorded = null;
+            return r;
+        }
+
+        public static void EmitMappedForTest(int src, int dst, bool down, bool repeat)
+        {
+            EmitMapped(src, dst, down, repeat);
+        }
+
         // 返回 SendInput 的结果：0 表示注入被系统拒绝(通常是权限/UIPI问题)
         public static uint SendVk(int vk, bool down)
         {
+            if (_recorded != null) { _recorded.Add(down ? vk : -vk); return 1; }
             Native.INPUT[] inp = new Native.INPUT[1];
             if (vk == Native.VK_LBUTTON || vk == Native.VK_RBUTTON || vk == Native.VK_MBUTTON)
             {
