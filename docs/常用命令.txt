@@ -21,19 +21,19 @@ powershell -ExecutionPolicy Bypass -File .\build-test.ps1 > $null 2>&1; echo "ex
 
 # ===== 打包发布 =====
 # 依次执行：构建 -> 跑全部测试(不过则拒绝打包) -> 生成 zip -> 校验中文文件名 -> 打印 SHA256
-powershell -ExecutionPolicy Bypass -File .\make-release.ps1 -Version 1.0.0
+powershell -ExecutionPolicy Bypass -File .\make-release.ps1 -Version 1.0.1
 
 # 产物：dist\War3Helper-vX.Y.Z.zip（内含 War3Helper.exe 和 使用说明.txt）
 
 
 # ===== 打 tag 并推送 =====
 # annotated tag，说明写在 -m 里
-git tag -a v1.0.0 -m "War3助手 v1.0.0"
+git tag -a v1.0.1 -m "War3助手 v1.0.1"
 
 # 推送代码和 tag（两条要分开推）
 git push origin main
 
-git push origin v1.0.0
+git push origin v1.0.1
 
 # 查看本地和远程的 tag
 git tag -n99
@@ -46,31 +46,31 @@ git ls-remote --tags origin
 gh auth status
 
 # 用已存在的 tag 创建 release 并上传 zip
-gh release create v1.0.0 ".\dist\War3Helper-v1.0.0.zip" --repo wangyendt/war3-helper --title "War3助手 v1.0.0" --notes-file ".\dist\release-body.md"
+gh release create v1.0.1 ".\dist\War3Helper-v1.0.1.zip" --repo wangyendt/war3-helper --title "War3助手 v1.0.1" --notes-file ".\release-body.md"
 
 # 没提前打 tag 时，让 gh 基于 main 自己建 tag
-gh release create v1.0.0 ".\dist\War3Helper-v1.0.0.zip" --repo wangyendt/war3-helper --target main --title "War3助手 v1.0.0" --notes-file ".\dist\release-body.md"
+gh release create v1.0.1 ".\dist\War3Helper-v1.0.1.zip" --repo wangyendt/war3-helper --target main --title "War3助手 v1.0.1" --notes-file ".\release-body.md"
 
 # 查看已发布的 release
 gh release list --repo wangyendt/war3-helper
 
 # 查看某个 release 的详情和附件
-gh release view v1.0.0 --repo wangyendt/war3-helper --json tagName,name,isDraft,publishedAt,url,assets
+gh release view v1.0.1 --repo wangyendt/war3-helper --json tagName,name,isDraft,publishedAt,url,assets
 
 # 给已有 release 补传或替换附件
-gh release upload v1.0.0 ".\dist\War3Helper-v1.0.0.zip" --repo wangyendt/war3-helper --clobber
+gh release upload v1.0.1 ".\dist\War3Helper-v1.0.1.zip" --repo wangyendt/war3-helper --clobber
 
 # 删除 release（tag 会保留，需要时再单独删 tag）
-gh release delete v1.0.0 --repo wangyendt/war3-helper --yes
+gh release delete v1.0.1 --repo wangyendt/war3-helper --yes
 
 
 # ===== 发布后验证 =====
 # 注意：本节两条是 PowerShell 语句，直接粘进 PowerShell 窗口执行，不要套 powershell -Command
 # 从 GitHub 把包下回来核对 SHA256，确认上传没有损坏
-Invoke-WebRequest -Uri 'https://github.com/wangyendt/war3-helper/releases/download/v1.0.0/War3Helper-v1.0.0.zip' -OutFile "$env:TEMP\w3h.zip" -UseBasicParsing; (Get-FileHash "$env:TEMP\w3h.zip" -Algorithm SHA256).Hash
+Invoke-WebRequest -Uri 'https://github.com/wangyendt/war3-helper/releases/download/v1.0.1/War3Helper-v1.0.1.zip' -OutFile "$env:TEMP\w3h.zip" -UseBasicParsing; (Get-FileHash "$env:TEMP\w3h.zip" -Algorithm SHA256).Hash
 
 # 本地包的 SHA256，用来和上面的结果比对
-(Get-FileHash '.\dist\War3Helper-v1.0.0.zip' -Algorithm SHA256).Hash
+(Get-FileHash '.\dist\War3Helper-v1.0.1.zip' -Algorithm SHA256).Hash
 
 
 # ===== 诊断 =====
