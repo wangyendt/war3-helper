@@ -236,36 +236,71 @@ namespace War3Helper
         // 配置文件存在但读不出来时的提示，由主界面在启动后显示
         public static string LoadWarning;
 
+        // 从一个文件读配置。读不出来返回 null，不抛异常。
+        static AppConfig TryLoadFrom(string path, out string error)
+        {
+            error = null;
+            try
+            {
+                if (!File.Exists(path)) return null;
+                string json = File.ReadAllText(path, Encoding.UTF8);
+                if (string.IsNullOrEmpty(json.Trim())) { error = "文件是空的"; return null; }
+                JavaScriptSerializer ser = new JavaScriptSerializer();
+                AppConfig c = ser.Deserialize<AppConfig>(json);
+                if (c == null) { error = "反序列化返回 null"; return null; }
+                c.FixUp();
+                return c;
+            }
+            catch (Exception ex) { error = ex.Message; return null; }
+        }
+
+        // 加载顺序：主文件 -> .bak -> 默认值。
+        // 关键点是绝不能"主文件读不到就直接用默认值"然后被下一次保存写回去 ——
+        // 那样一次偶发的读取失败就会把用户的改键方案永久抹掉。
         public static AppConfig Load()
         {
             LoadWarning = null;
-            bool existed = false;
-            try
+            string path = ConfigPath;
+            string bak = path + ".bak";
+
+            string err;
+            AppConfig c = TryLoadFrom(path, out err);
+            if (c != null) return c;
+
+            bool mainExisted = File.Exists(path);
+
+            // 主文件缺失或损坏，先试备份
+            string bakErr;
+            AppConfig fromBak = TryLoadFrom(bak, out bakErr);
+            if (fromBak != null)
             {
-                existed = File.Exists(ConfigPath);
-                if (existed)
+                if (mainExisted)
                 {
-                    string json = File.ReadAllText(ConfigPath, Encoding.UTF8);
-                    JavaScriptSerializer ser = new JavaScriptSerializer();
-                    AppConfig c = ser.Deserialize<AppConfig>(json);
-                    if (c != null) { c.FixUp(); return c; }
+                    string saved = path + ".broken-" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json";
+                    try { File.Move(path, saved); }
+                    catch { saved = path; }
+                    LoadWarning = "配置文件读取失败，已从备份恢复。\r\n\r\n" +
+                                  "读不出来的原文件保留为:\r\n" + saved +
+                                  (err != null ? "\r\n\r\n错误: " + err : "");
                 }
-            }
-            catch (Exception ex)
-            {
-                LoadWarning = ex.Message;
+                else
+                {
+                    LoadWarning = "配置文件不见了，已从备份恢复:\r\n" + bak;
+                }
+                try { fromBak.Save(); }
+                catch { }
+                return fromBak;
             }
 
-            // 文件明明在、却没读出来 —— 绝不能默默套用默认值然后被第一次保存覆盖掉。
-            // 先把它挪到一边留证，用户还能手工找回来。
-            if (existed)
+            // 备份也没有/也坏了，才退到默认值。主文件存在的话留证，绝不覆盖。
+            if (mainExisted)
             {
-                string saved = ConfigPath + ".broken-" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json";
-                try { File.Move(ConfigPath, saved); }
-                catch { saved = ConfigPath; }
-                LoadWarning = "配置文件读取失败，已改用默认设置。\r\n\r\n" +
+                string saved = path + ".broken-" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json";
+                try { File.Move(path, saved); }
+                catch { saved = path; }
+                LoadWarning = "配置文件读取失败，备份也无法恢复，已改用默认设置。\r\n\r\n" +
                               "原文件没有被覆盖，已保留为:\r\n" + saved +
-                              (LoadWarning != null ? "\r\n\r\n错误: " + LoadWarning : "");
+                              (err != null ? "\r\n\r\n错误: " + err : "");
             }
 
             AppConfig d = new AppConfig();
@@ -274,23 +309,24 @@ namespace War3Helper
             return d;
         }
 
-        // 原子写入：先写临时文件再替换，避免写到一半崩溃导致配置损坏丢方案
+        // 原子写入。
+        // 原来是 复制到.bak -> 删除主文件 -> 重命名临时文件，中间有一段"主文件不存在"的窗口；
+        // 另一个实例正好在那一刻启动，Load() 就会认为没有配置而套用默认值，
+        // 接着它自己一保存，用户的改键方案就被永久抹掉了。
+        // File.Replace 是原子的：替换和生成 .bak 一步完成，全程不存在主文件缺失的瞬间。
         public void Save()
         {
             try
             {
                 JavaScriptSerializer ser = new JavaScriptSerializer();
                 string json = ser.Serialize(this);
-                string tmp = ConfigPath + ".tmp";
+                string path = ConfigPath;
+                string tmp = path + ".tmp";
                 File.WriteAllText(tmp, json, Encoding.UTF8);
-                if (File.Exists(ConfigPath))
-                {
-                    string bak = ConfigPath + ".bak";
-                    try { File.Copy(ConfigPath, bak, true); }
-                    catch { }
-                    File.Delete(ConfigPath);
-                }
-                File.Move(tmp, ConfigPath);
+                if (File.Exists(path))
+                    File.Replace(tmp, path, path + ".bak", true);
+                else
+                    File.Move(tmp, path);
             }
             catch { }
         }

@@ -15,6 +15,33 @@ static class DumpConfig
         Console.WriteLine("绿色版模式     : " + AppConfig.IsPortableConfig);
         Console.WriteLine();
 
+        // 直接把这个进程实际读到的内容打出来，用于区分"读到了别的文件"和"解析出了问题"
+        string p = AppConfig.ConfigPath;
+        if (System.IO.File.Exists(p))
+        {
+            System.IO.FileInfo fi = new System.IO.FileInfo(p);
+            Console.WriteLine("文件字节数   : " + fi.Length);
+            Console.WriteLine("最后写入     : " + fi.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"));
+            string json = System.IO.File.ReadAllText(p, System.Text.Encoding.UTF8);
+            Console.WriteLine("读到字符数   : " + json.Length);
+            int n = Math.Min(110, json.Length);
+            Console.WriteLine("开头         : " + json.Substring(0, n));
+            try
+            {
+                System.Web.Script.Serialization.JavaScriptSerializer ser =
+                    new System.Web.Script.Serialization.JavaScriptSerializer();
+                AppConfig raw = ser.Deserialize<AppConfig>(json);
+                Console.WriteLine("反序列化     : " + (raw == null ? "返回 null"
+                    : "成功, Schemes=" + (raw.Schemes == null ? "null" : raw.Schemes.Count.ToString())
+                      + ", ShopModeEnabled=" + raw.ShopModeEnabled));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("反序列化抛异常: " + ex.GetType().Name + " - " + ex.Message);
+            }
+            Console.WriteLine();
+        }
+
         AppConfig c = AppConfig.Load();
         if (AppConfig.LoadWarning != null)
             Console.WriteLine("!! 加载告警: " + AppConfig.LoadWarning);
