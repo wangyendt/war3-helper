@@ -456,6 +456,16 @@ namespace War3Helper
             bool up = (msg == Native.WM_KEYUP || msg == Native.WM_SYSKEYUP);
             int vk = Native.ReadInt(lParam, Native.KbdVkCodeOffset);
 
+            // Windows 在 Shift+小键盘前合成 Shift 抬起，扫描码带 SCANCODE_SIMULATED。
+            // 它没有 InjectMagic，也不一定带 LLKHF_INJECTED，不能当成玩家真的松手。
+            // 我们发小键盘键期间吞掉它，保证物品键仍带 Shift(排队)，避免打断 TP。
+            if ((vk == 0xA0 || vk == 0xA1)
+                && IsSimulatedShift(vk, Native.ReadInt(lParam, Native.KbdScanCodeOffset)))
+            {
+                if (_sendingNumpad > 0) return new IntPtr(1);
+                return Native.CallNextHookEx(_kbHook, nCode, wParam, lParam);
+            }
+
             // 物理按键状态始终跟踪(即使不在游戏中)，供修饰键判断使用
             bool repeat = false;
             if (vk >= 0 && vk < 256)
@@ -579,10 +589,8 @@ namespace War3Helper
 
         public static void ResetItemPressTimes() { _lastItemPress.Clear(); }
 
-        // 注入"选中英雄"时必须先把玩家按住的修饰键临时松开。
-        // 否则按 Shift+物品键 时，游戏收到的是 Shift+F1 —— 魔兽里那是"切换"选中状态，
-        // 英雄本来选着就被取消了。发完再按回去，后面的物品键照样带 Shift，
-        // Shift+物品(排队使用)不受影响。
+        // 非排队操作选英雄时临时松开 Ctrl/Alt，避免选择键变成组合键。
+        // Shift 排队操作完全跳过选英雄，不能在队列里插入选择指令或松开 Shift。
         static readonly int[] SuppressibleMods = new int[] { 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5 };
         static readonly int[] _suppressBuf = new int[6];
 
@@ -611,6 +619,7 @@ namespace War3Helper
         static void EmitMapped(int src, int dst, bool down, bool repeat)
         {
             if (down && !repeat && Cfg.ItemKeySelectHeroFirst && _itemSrc.Contains(src)
+                && !PhysShift && !IsPhysicallyHeld(0x10) && !IsPhysicallyHeld(0xA0) && !IsPhysicallyHeld(0xA1)
                 && ConsumeItemPress(src))
             {
                 int hero = Cfg.HeroSelectKey != 0 ? Cfg.HeroSelectKey : VK_F1;
@@ -720,9 +729,16 @@ namespace War3Helper
         }
 
         // ================= 输入合成 =================
+        static int _sendingNumpad;
+
+        public static bool IsSimulatedShift(int vk, int scan)
+        {
+            return (vk == 0xA0 && scan == 0x22A) || (vk == 0xA1 && scan == 0x236);
+        }
+
         // 测试接缝：录制模式下只记录要发的按键，不真的注入。
-        // 用来确定性地验证"发出去的按键顺序"，这类 bug(比如 Shift 没松开导致 Shift+F1)
-        // 光靠肉眼看代码很难发现。
+        // 用来验证助手准备发送的按键顺序；Windows 额外生成的 Shift 事件
+        // 需要 tools/TestShiftNumpad.cs 的真实输入测试才能覆盖。
         static List<int> _recorded;
 
         // 物理按键是否按住。测试里可替换，免得依赖真实键盘状态。
@@ -762,7 +778,8 @@ namespace War3Helper
             else
             {
                 ushort scan = (ushort)Native.MapVirtualKey((uint)vk, 0);
-                bool scanOnly = (Cfg != null && Cfg.InjectMode == 1 && scan != 0);
+                // 小键盘始终保留 VK：纯扫描码在 Shift 按住时会被 Windows 译成方向键。
+                bool scanOnly = (Cfg != null && Cfg.InjectMode == 1 && scan != 0 && !IsNumpadVk(vk));
                 inp[0].type = 1;
                 // 方式1(默认): 带虚拟键+扫描码。方式2: 只发扫描码 —— 有些用
                 // DirectInput/RawInput 读键盘的老游戏只认扫描码。
@@ -773,7 +790,10 @@ namespace War3Helper
                 if (IsExtended(vk)) inp[0].u.ki.dwFlags |= Native.KEYEVENTF_EXTENDEDKEY;
                 inp[0].u.ki.dwExtraInfo = Native.InjectMagic;
             }
-            return Native.SendInput(1, inp, Marshal.SizeOf(typeof(Native.INPUT)));
+            bool numpad = IsNumpadVk(vk);
+            if (numpad) _sendingNumpad++;
+            try { return Native.SendInput(1, inp, Marshal.SizeOf(typeof(Native.INPUT))); }
+            finally { if (numpad) _sendingNumpad--; }
         }
 
         static bool IsExtended(int vk)

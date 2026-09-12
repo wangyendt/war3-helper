@@ -24,6 +24,11 @@ static class EngineTests
         int ptrSize = IntPtr.Size;
         Console.WriteLine("  (running as " + (ptrSize == 8 ? "x64" : "x86") + ")");
         Check(Native.KbdVkCodeOffset == 0, "KBDLLHOOKSTRUCT.vkCode offset = 0 (got " + Native.KbdVkCodeOffset + ")");
+        Check(Native.KbdScanCodeOffset == 4, "KBDLLHOOKSTRUCT.scanCode offset = 4");
+        Check(Engine.IsSimulatedShift(0xA0, 0x22A) && Engine.IsSimulatedShift(0xA1, 0x236),
+              "recognises Windows simulated Shift events for both sides");
+        Check(!Engine.IsSimulatedShift(0xA0, 0x2A) && !Engine.IsSimulatedShift(0xA1, 0x36)
+              && !Engine.IsSimulatedShift(0xA2, 0x21D), "real Shift and AltGr Ctrl are not simulated Shift");
         int expectKbdExtra = (ptrSize == 8) ? 16 : 16;
         Check(Native.KbdExtraInfoOffset == expectKbdExtra,
               "KBDLLHOOKSTRUCT.dwExtraInfo offset = " + expectKbdExtra + " (got " + Native.KbdExtraInfoOffset + ")");
@@ -270,9 +275,8 @@ static class EngineTests
         Check(!Engine.Typing, "Esc when not typing changes nothing");
         Engine.ResetTyping();
 
-        // --- 3e) Shift+物品键：注入"选中英雄"前必须先松开修饰键 ---
-        // 否则游戏收到的是 Shift+F1，魔兽里那是"切换"选中状态，英雄反而被取消选中。
-        Console.WriteLine("\n[3e] hero-select must not inherit held modifiers");
+        // --- 3e) Shift 排队时完全跳过选英雄，不能插 F1 或松开 Shift ---
+        Console.WriteLine("\n[3e] queued items bypass hero-select and preserve modifiers");
         cfg.CurrentScheme = 0;
         cfg.ItemKeySelectHeroFirst = true;
         cfg.HeroSelectKey = 0x70;                 // F1
@@ -290,19 +294,36 @@ static class EngineTests
         Check(plain.Length == 3 && plain[0] == 0x70 && plain[1] == -0x70 && plain[2] == slotDst0,
               "no modifier held -> F1 down, F1 up, item key down");
 
-        // 按住左Shift：F1 前后必须有 Shift抬起 / Shift按下
-        Engine.ResetItemPressTimes();
-        Engine.IsPhysicallyHeld = delegate(int vk) { return vk == 0xA0; };   // 左Shift
+        foreach (int shift in new int[] { 0x10, 0xA0, 0xA1 })
+        {
+            Engine.ResetItemPressTimes();
+            Engine.IsPhysicallyHeld = delegate(int vk) { return vk == shift; };
+            Engine.BeginRecord();
+            Engine.EmitMappedForTest((int)'3', slotDst0, true, false);
+            Engine.EmitMappedForTest((int)'3', slotDst0, true, true);
+            Engine.EmitMappedForTest((int)'3', slotDst0, false, false);
+            int[] withShift = Engine.EndRecord();
+            Check(withShift.Length == 3 && withShift[0] == slotDst0
+                  && withShift[1] == slotDst0 && withShift[2] == -slotDst0,
+                  "Shift " + shift.ToString("X2") + ": only item down/repeat/up, no F1 or modifier changes");
+        }
+
+        // 排队操作不能消耗选英雄的双击时间窗，松开 Shift 后照常先选英雄。
+        Engine.IsPhysicallyHeld = delegate(int vk) { return false; };
         Engine.BeginRecord();
         Engine.EmitMappedForTest((int)'3', slotDst0, true, false);
-        int[] withShift = Engine.EndRecord();
-        Check(withShift.Length == 5, "shift held -> 5 events (got " + withShift.Length + ")");
-        Check(withShift.Length == 5 && withShift[0] == -0xA0, "1st: releases the held Shift");
-        Check(withShift.Length == 5 && withShift[1] == 0x70 && withShift[2] == -0x70,
-              "2nd/3rd: plain F1 (no Shift attached)");
-        Check(withShift.Length == 5 && withShift[3] == 0xA0, "4th: puts Shift back");
-        Check(withShift.Length == 5 && withShift[4] == slotDst0,
-              "5th: item key still gets Shift (Shift+item = queue)");
+        int[] afterShift = Engine.EndRecord();
+        Check(afterShift.Length == 3 && afterShift[0] == 0x70,
+              "first plain item after queued item still selects hero");
+
+        Engine.ResetItemPressTimes();
+        Engine.IsPhysicallyHeld = delegate(int vk) { return vk == 0xA2; };
+        Engine.BeginRecord();
+        Engine.EmitMappedForTest((int)'3', slotDst0, true, false);
+        int[] withCtrl = Engine.EndRecord();
+        Check(withCtrl.Length == 5 && withCtrl[0] == -0xA2 && withCtrl[1] == 0x70
+              && withCtrl[2] == -0x70 && withCtrl[3] == 0xA2 && withCtrl[4] == slotDst0,
+              "Ctrl without Shift still selects hero with Ctrl temporarily released");
 
         Engine.IsPhysicallyHeld = delegate(int vk) { return (Native.GetAsyncKeyState(vk) & 0x8000) != 0; };
         Engine.ResetItemPressTimes();

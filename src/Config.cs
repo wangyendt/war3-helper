@@ -112,7 +112,7 @@ namespace War3Helper
         // 改键注入的键也全带上 Alt。
         public bool AlwaysHealthBars { get; set; }
         public bool InGameIcon { get; set; }
-        public bool ItemKeySelectHeroFirst { get; set; }   // 物品键先按F1选英雄
+        public bool ItemKeySelectHeroFirst { get; set; }   // 物品键先按F1选英雄(Shift排队时跳过)
         public int SuspendKey { get; set; }                // 按住它时临时停用改键(0=未设)
         public int InjectMode { get; set; }                // 0=虚拟键+扫描码(默认) 1=纯扫描码
         public bool AutoNumLock { get; set; }              // 有小键盘改键时自动开启NumLock

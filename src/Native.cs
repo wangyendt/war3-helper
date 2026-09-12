@@ -260,6 +260,8 @@ namespace War3Helper
         // 偏移用 OffsetOf 算出来，32/64 位都正确。
         public static readonly int KbdVkCodeOffset =
             Marshal.OffsetOf(typeof(KBDLLHOOKSTRUCT), "vkCode").ToInt32();
+        public static readonly int KbdScanCodeOffset =
+            Marshal.OffsetOf(typeof(KBDLLHOOKSTRUCT), "scanCode").ToInt32();
         public static readonly int KbdExtraInfoOffset =
             Marshal.OffsetOf(typeof(KBDLLHOOKSTRUCT), "dwExtraInfo").ToInt32();
         public static readonly int MouseDataOffset =
