@@ -116,6 +116,9 @@ namespace War3Helper
         TextBox txtPath;
         ComboBox cmbRes, cmbLaunch;
         CheckBox chkOpenGL, chkLock, chkAlwaysBars, chkIcon;
+        CheckBox chkHighFps;
+        Label lblHighFps;
+        bool highFpsBusy, versionBusy;
         bool _barsOn;
         CaptureBox capBoss;
         TrackBar trackOpacity, trackIconOpacity;
@@ -1107,11 +1110,17 @@ namespace War3Helper
             tp.Controls.Add(l1);
             txtPath = new TextBox();
             txtPath.Bounds = new Rectangle(84, 12, 500, 24);
-            txtPath.TextChanged += delegate { if (loading) return; cfg.War3Path = txtPath.Text; cfg.Save(); ApplyReplayWatcher(); };
+            txtPath.TextChanged += delegate
+            {
+                if (loading) return;
+                cfg.War3Path = txtPath.Text;
+                cfg.Save(); ApplyReplayWatcher(); RefreshHighFpsUi();
+            };
             tp.Controls.Add(txtPath);
             Button bBrowse = new Button(); bBrowse.Text = "浏览"; bBrowse.Bounds = new Rectangle(594, 10, 70, 27);
             bBrowse.Click += delegate
             {
+                if (highFpsBusy || versionBusy) return;
                 FolderBrowserDialog d = new FolderBrowserDialog();
                 d.SelectedPath = cfg.War3Path;
                 if (d.ShowDialog(this) == DialogResult.OK) txtPath.Text = d.SelectedPath;
@@ -1298,10 +1307,79 @@ namespace War3Helper
 
             Label tips = new Label();
             tips.Text = "无边框全屏 = 以桌面分辨率窗口化启动，游戏窗口出现后自动去边框铺满屏幕。\r\n" +
-                        "Alt+Tab 切换不卡顿、悬浮图标和APM都能正常显示，画面效果与全屏一致。";
-            tips.Bounds = new Rectangle(12, 418, 690, 44);
+                        "每次启动时，刷新率和帧率上限跟随系统主屏设置；实际 FPS 仍受游戏版本和渲染器限制。\r\n" +
+                        "修改系统刷新率后请退出游戏再启动。无边框模式支持快速 Alt+Tab 和局内悬浮窗。";
+            tips.Bounds = new Rectangle(12, 418, 690, 64);
             tips.ForeColor = Color.DimGray;
             tp.Controls.Add(tips);
+
+            GroupBox gFps = new GroupBox();
+            gFps.Text = "高帧率（全部 10 个内置版本）";
+            gFps.Bounds = new Rectangle(12, 488, 690, 88);
+            tp.Controls.Add(gFps);
+            chkHighFps = new CheckBox();
+            chkHighFps.Text = "开启高帧率，帧率上限跟随系统";
+            chkHighFps.Bounds = new Rectangle(14, 22, 480, 22);
+            chkHighFps.CheckedChanged += delegate { if (!loading) SetHighFpsEnabled(); };
+            gFps.Controls.Add(chkHighFps);
+            LinkLabel fpsSource = new LinkLabel();
+            fpsSource.Text = "兼容版本 / 说明";
+            fpsSource.Bounds = new Rectangle(540, 23, 140, 22);
+            fpsSource.LinkClicked += delegate
+            {
+                try { System.Diagnostics.Process.Start(HighFps.ProjectUrl); }
+                catch (Exception ex) { MessageBox.Show(this, ex.Message); }
+            };
+            gFps.Controls.Add(fpsSource);
+            lblHighFps = new Label();
+            lblHighFps.Bounds = new Rectangle(14, 49, 664, 34);
+            lblHighFps.ForeColor = Color.DimGray;
+            gFps.Controls.Add(lblHighFps);
+        }
+
+        void RefreshHighFpsUi()
+        {
+            if (chkHighFps == null || highFpsBusy) return;
+            bool wasLoading = loading;
+            loading = true;
+            chkHighFps.Checked = HighFps.IsEnabled(cfg.War3Path);
+            int hz = War3Ctl.GetSystemRefreshRate();
+            chkHighFps.Text = "开启高帧率，帧率上限跟随系统" + (hz > 1 ? "（" + hz + " FPS）" : "");
+            lblHighFps.Text = chkHighFps.Checked
+                ? "已开启，切换版本后保持。每次通过助手启动时同步上限；退出游戏后取消勾选可关闭。"
+                : "支持 1.20e 至 1.27b（含 1.24e）。使用内置模块，无需下载；请退出游戏后开关。";
+            loading = wasLoading;
+        }
+
+        void SetHighFpsEnabled()
+        {
+            if (highFpsBusy || versionBusy) { RefreshHighFpsUi(); return; }
+            bool enabled = chkHighFps.Checked;
+            string directory = cfg.War3Path;
+            highFpsBusy = true;
+            chkHighFps.Enabled = false;
+            txtPath.Enabled = false;
+            lblHighFps.Text = enabled ? "正在校验并安装高帧率模块…" : "正在移除高帧率模块…";
+            ThreadPool.QueueUserWorkItem(delegate(object unused)
+            {
+                string error = HighFps.SetEnabled(directory, enabled);
+                try
+                {
+                    BeginInvoke((Action)delegate
+                    {
+                        highFpsBusy = false;
+                        chkHighFps.Enabled = true;
+                        txtPath.Enabled = true;
+                        RefreshHighFpsUi();
+                        if (error != null)
+                        {
+                            lblHighFps.Text = "操作未完成，请查看错误说明。";
+                            MessageBox.Show(this, error, "高帧率", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                    });
+                }
+                catch (InvalidOperationException) { }
+            });
         }
 
         static bool ParseRes(string s, out int w, out int h)
@@ -1426,18 +1504,14 @@ namespace War3Helper
                 MessageBox.Show(this, "魔兽正在运行，请先退出后再播放录像。");
                 return;
             }
-            string exe = War3Ctl.Exe(cfg.War3Path);
-            if (exe == null) { MessageBox.Show(this, "找不到 War3.exe"); return; }
             try
             {
                 string rel = r.Path;
                 string root = cfg.War3Path.TrimEnd('\\') + "\\";
                 if (rel.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                     rel = rel.Substring(root.Length);
-                System.Diagnostics.ProcessStartInfo psi =
-                    new System.Diagnostics.ProcessStartInfo(exe, "-loadfile \"" + rel + "\"");
-                psi.WorkingDirectory = cfg.War3Path;
-                System.Diagnostics.Process.Start(psi);
+                string err = War3Ctl.Launch(cfg, cfg.Launch, rel);
+                if (err != null) MessageBox.Show(this, err);
             }
             catch (Exception ex) { MessageBox.Show(this, "播放失败: " + ex.Message); }
         }
@@ -1713,10 +1787,11 @@ namespace War3Helper
 "  每局结束自动备份 LastReplay.w3g 到 Replay\\AutoSave，文件名含日期与时长。\r\n" +
 "  录像页可浏览全部录像(时长/大小/时间)、播放、重命名、删除(移入回收站)。\r\n\r\n" +
 "【与原版U9WSH的差异】\r\n" +
-"  本工具用系统级按键钩子实现，不注入游戏进程、不读写游戏内存:\r\n" +
-"  · 兼容任意魔兽版本(1.20~1.28)，切换版本无需更新助手，无封号风险。\r\n" +
+"  改键和喊话使用系统级按键钩子，适用于魔兽 1.20~1.28。\r\n" +
+"  · 可选高帧率支持全部 10 个内置版本，使用随助手提供的模块，切换版本后保持。\r\n" +
+"    上限跟随系统刷新率；退出游戏后取消勾选可移除，切换版本后保持开启。\r\n" +
 "  · 原版靠内存注入的 AI一键操作指令、JASS脚本引擎 未包含。\r\n" +
-"  · 原版的显血显蓝靠内存补丁(原版自己也提示有封号风险)，本工具改用Alt方案。\r\n\r\n" +
+"  · 血条常显使用游戏自带设置。\r\n\r\n" +
 "【提示】\r\n" +
 "  · 关闭窗口 = 最小化到托盘继续工作，托盘右键→退出 才是真正退出。\r\n" +
 "  · 如按键映射后游戏无反应，请把本助手也以管理员身份运行\r\n" +
@@ -1761,6 +1836,9 @@ namespace War3Helper
 
         void SetVersionBusy(bool busy)
         {
+            versionBusy = busy;
+            txtPath.Enabled = !busy;
+            chkHighFps.Enabled = !busy;
             btnSwitch.Enabled = !busy;
             btnDownload.Enabled = !busy;
             lvVersions.Enabled = !busy;
@@ -1768,6 +1846,7 @@ namespace War3Helper
 
         void DoSwitchVersion()
         {
+            if (highFpsBusy) { MessageBox.Show(this, "请等待高帧率设置完成。"); return; }
             if (lvVersions.SelectedItems.Count == 0) { MessageBox.Show(this, "请先选中一个版本"); return; }
             VersionPackage p = lvVersions.SelectedItems[0].Tag as VersionPackage;
             if (p == null) return;
@@ -1785,6 +1864,7 @@ namespace War3Helper
                 " 切换到 " + p.Name + "。\r\n\r\n" +
                 "· 当前版本的全部相关文件会先快照到 VersionStore\\" + cur + "\\\r\n" +
                 "· 然后应用 " + Path.GetFileName(p.ZipPath) + "\r\n" +
+                "· 高帧率开关保持不变，模块会自动适配对应版本\r\n" +
                 "· 过程中请勿启动魔兽\r\n\r\n继续？",
                 "确认切换版本", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
 
@@ -1812,6 +1892,7 @@ namespace War3Helper
                     BeginInvoke((Action)delegate
                     {
                         SetVersionBusy(false);
+                        RefreshHighFpsUi();
                         if (err == null)
                         {
                             barVer.Value = 100;
@@ -1834,6 +1915,7 @@ namespace War3Helper
 
         void DoDownloadVersion()
         {
+            if (highFpsBusy) { MessageBox.Show(this, "请等待高帧率设置完成。"); return; }
             string url = Prompt("版本包下载地址 (直链 .zip):", "");
             if (string.IsNullOrEmpty(url)) return;
             if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
@@ -1902,6 +1984,7 @@ namespace War3Helper
             chkIgnoreShort.Checked = cfg.IgnoreShortReplay;
             chkApm.Checked = cfg.ShowApm;
             chkOpenGL.Checked = cfg.UseOpenGL;
+            RefreshHighFpsUi();
             // 以注册表为准，不以我们自己的配置为准：玩家可能在游戏里自己改过
             chkAlwaysBars.Checked = War3Ctl.GetAlwaysHealthBars();
             chkIcon.Checked = cfg.InGameIcon;

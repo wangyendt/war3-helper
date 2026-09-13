@@ -159,6 +159,47 @@ namespace War3Helper
         const string RegVideo = @"Software\Blizzard Entertainment\Warcraft III\Video";
         const string RegGameplay = @"Software\Blizzard Entertainment\Warcraft III\Gameplay";
 
+        // 和无边框启动所用的主屏保持一致；读取当前设置，不改 Windows 显示模式。
+        public static int GetSystemRefreshRate()
+        {
+            System.Windows.Forms.Screen screen = System.Windows.Forms.Screen.PrimaryScreen;
+            if (screen == null) return 0;
+            Native.DEVMODE mode = new Native.DEVMODE();
+            mode.dmSize = (ushort)System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.DEVMODE));
+            if (!Native.EnumDisplaySettings(screen.DeviceName, Native.ENUM_CURRENT_SETTINGS, ref mode))
+                return 0;
+            // 0/1 表示驱动没有报告具体频率，不能把它写成游戏的刷新率或帧率上限。
+            return mode.dmDisplayFrequency > 1 && mode.dmDisplayFrequency <= int.MaxValue
+                ? (int)mode.dmDisplayFrequency : 0;
+        }
+
+        internal static void WriteRefreshRateSettings(RegistryKey video, int refreshRate)
+        {
+            if (refreshRate <= 1) return;
+            video.SetValue("refreshrate", refreshRate, RegistryValueKind.DWord);
+            // 支持 maxfps 的版本也同步上限，避免 240Hz 屏仍被旧的 200 FPS 设置限制。
+            // 老版本渲染器可能另有限制，这个值不保证实际渲染帧率。
+            video.SetValue("maxfps", refreshRate, RegistryValueKind.DWord);
+        }
+
+        static string SyncRefreshRate()
+        {
+            try
+            {
+                int refreshRate = GetSystemRefreshRate();
+                if (refreshRate <= 1)
+                {
+                    Diag.Note("无法读取系统刷新率，保留魔兽原有刷新率设置。");
+                    return null;
+                }
+                using (RegistryKey video = Registry.CurrentUser.CreateSubKey(RegVideo))
+                    WriteRefreshRateSettings(video, refreshRate);
+                Diag.Note("魔兽刷新率及帧率上限跟随系统: " + refreshRate + " Hz / FPS");
+                return null;
+            }
+            catch (Exception ex) { return "同步系统刷新率失败: " + ex.Message; }
+        }
+
         public static void SetRegistryResolution(int w, int h)
         {
             try
@@ -227,8 +268,28 @@ namespace War3Helper
         // 启动魔兽。borderless模式下会在窗口出现后自动去边框铺满。
         public static string Launch(AppConfig cfg, LaunchMode mode)
         {
+            return Launch(cfg, mode, null);
+        }
+
+        public static string Launch(AppConfig cfg, LaunchMode mode, string replayPath)
+        {
+            if (!Monitor.TryEnter(HighFps.OperationGate)) return "正在处理高帧率设置或版本切换，请稍候。";
+            try { return LaunchCore(cfg, mode, replayPath); }
+            finally { Monitor.Exit(HighFps.OperationGate); }
+        }
+
+        static string LaunchCore(AppConfig cfg, LaunchMode mode, string replayPath)
+        {
             string exe = Exe(cfg.War3Path);
             if (exe == null) return "找不到 War3.exe，请检查魔兽路径";
+            // 游戏会在退出时写回旧设置，而且修改注册表不能改变正在运行的渲染器。
+            if (War3Pids().Count > 0) return "魔兽正在运行，请先退出游戏再启动，刷新率设置将在下次启动时生效。";
+
+            string fpsError = HighFps.PrepareForLaunch(cfg.War3Path, GetSystemRefreshRate());
+            if (fpsError != null) return fpsError;
+
+            string refreshError = SyncRefreshRate();
+            if (refreshError != null) return refreshError;
 
             bool windowed = (mode != LaunchMode.ExclusiveFullscreen);
             if (mode == LaunchMode.BorderlessFullscreen)
@@ -244,6 +305,7 @@ namespace War3Helper
             string args = "";
             if (windowed) args += " -window";
             if (cfg.UseOpenGL) args += " -opengl";
+            if (!string.IsNullOrEmpty(replayPath)) args += " -loadfile \"" + replayPath + "\"";
 
             try
             {

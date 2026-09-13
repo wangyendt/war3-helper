@@ -151,6 +151,31 @@ namespace War3Helper
             public uint dwFlags;
         }
 
+        // DEVMODEW 的显示器布局（Unicode，220 字节）。
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct DEVMODE
+        {
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string dmDeviceName;
+            public ushort dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+            public uint dmFields;
+            public POINT dmPosition;
+            public uint dmDisplayOrientation, dmDisplayFixedOutput;
+            public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string dmFormName;
+            public ushort dmLogPixels;
+            public uint dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags;
+            public uint dmDisplayFrequency;
+            public uint dmICMMethod, dmICMIntent, dmMediaType, dmDitherType;
+            public uint dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+        }
+
+        public const int ENUM_CURRENT_SETTINGS = -1;
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE mode);
+
         public delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
         public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 

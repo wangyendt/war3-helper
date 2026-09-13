@@ -237,9 +237,15 @@ namespace War3Helper
         public static string SwitchTo(string war3Dir, VersionPackage target, string currentLabel,
                                       List<VersionPackage> allPackages, Progress prog)
         {
-            if (War3Running())
-                return "魔兽正在运行，请先完全退出游戏再切换版本。";
-            return ApplySwitch(war3Dir, target, currentLabel, allPackages, prog);
+            if (!System.Threading.Monitor.TryEnter(HighFps.OperationGate))
+                return "正在处理高帧率设置或启动，请稍候。";
+            try
+            {
+                if (War3Running())
+                    return "魔兽正在运行，请先完全退出游戏再切换版本。";
+                return ApplySwitch(war3Dir, target, currentLabel, allPackages, prog);
+            }
+            finally { System.Threading.Monitor.Exit(HighFps.OperationGate); }
         }
 
         // 纯文件操作部分，不含"游戏是否在运行"的前置检查，便于沙箱测试。
@@ -256,6 +262,9 @@ namespace War3Helper
 
             try
             {
+                // 开关随游戏目录保留；统一模块在下次启动时选择对应版本。
+                HighFps.PrepareForSwitch(war3Dir);
+
                 // 1) 快照当前版本（若尚未快照）
                 if (prog != null) prog("备份当前版本 " + currentLabel + " ...", 0);
                 Snapshot(war3Dir, currentLabel, managed, prog);
