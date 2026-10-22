@@ -1,4 +1,5 @@
-# Build the small x86 Miles module. Requires Visual C++ Build Tools and Windows SDK.
+# Build the optional x86 Miles modules. Requires Visual C++ Build Tools and Windows SDK.
+param([switch]$Test)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -21,3 +22,18 @@ $args = @('/nologo','/LD','/MT','/O2','/W4','/WX','/EHsc','/DUNICODE','/D_UNICOD
     ('/LIBPATH:' + (Join-Path $kit ('Lib\' + $sdk.Name + '\um\x86'))),'kernel32.lib','version.lib','user32.lib')
 & (Join-Path $vc 'bin\Hostx64\x86\cl.exe') $args
 if ($LASTEXITCODE -ne 0) { throw 'FPS module build failed.' }
+
+$backgroundArgs = @($args | ForEach-Object { $_.Replace('HighFps.cpp', 'BackgroundRun.cpp').Replace('HighFps.obj', 'BackgroundRun.obj').Replace('War3HelperFps.mix', 'War3HelperBackground.mix') })
+$backgroundArgs += @('comctl32.lib', 'shell32.lib')
+& (Join-Path $vc 'bin\Hostx64\x86\cl.exe') $backgroundArgs
+if ($LASTEXITCODE -ne 0) { throw 'Background module build failed.' }
+
+if ($Test) {
+    $testArgs = @($backgroundArgs | Where-Object { $_ -ne '/LD' } | ForEach-Object {
+        $_.Replace('native\BackgroundRun.cpp', 'tools\TestBackgroundNative.cpp').Replace('BackgroundRun.obj', 'TestBackgroundNative.obj').Replace('War3HelperBackground.mix', 'TestBackgroundNative.exe')
+    })
+    & (Join-Path $vc 'bin\Hostx64\x86\cl.exe') $testArgs
+    if ($LASTEXITCODE -ne 0) { throw 'Background native test build failed.' }
+    & (Join-Path $output 'TestBackgroundNative.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'Background native tests failed.' }
+}

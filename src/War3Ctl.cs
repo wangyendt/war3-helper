@@ -285,6 +285,9 @@ namespace War3Helper
             // 游戏会在退出时写回旧设置，而且修改注册表不能改变正在运行的渲染器。
             if (War3Pids().Count > 0) return "魔兽正在运行，请先退出游戏再启动，刷新率设置将在下次启动时生效。";
 
+            string backgroundError = BackgroundRun.PrepareForLaunch(cfg.War3Path, cfg.RunInBackground, mode);
+            if (backgroundError != null) return backgroundError;
+
             string fpsError = HighFps.PrepareForLaunch(cfg.War3Path, GetSystemRefreshRate());
             if (fpsError != null) return fpsError;
 

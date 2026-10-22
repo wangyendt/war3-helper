@@ -117,6 +117,7 @@ namespace War3Helper
         ComboBox cmbRes, cmbLaunch;
         CheckBox chkOpenGL, chkLock, chkAlwaysBars, chkIcon;
         CheckBox chkHighFps;
+        CheckBox chkRunInBackground;
         Label lblHighFps;
         bool highFpsBusy, versionBusy;
         bool _barsOn;
@@ -1305,11 +1306,21 @@ namespace War3Helper
             };
             tp.Controls.Add(trackOpacity);
 
+            chkRunInBackground = new CheckBox();
+            chkRunInBackground.Text = "切换应用不自动暂停（单机，实验性）";
+            chkRunInBackground.Bounds = new Rectangle(12, 414, 450, 22);
+            chkRunInBackground.CheckedChanged += delegate
+            {
+                if (loading) return;
+                cfg.RunInBackground = chkRunInBackground.Checked;
+                cfg.Save();
+            };
+            tp.Controls.Add(chkRunInBackground);
+
             Label tips = new Label();
-            tips.Text = "无边框全屏 = 以桌面分辨率窗口化启动，游戏窗口出现后自动去边框铺满屏幕。\r\n" +
-                        "每次启动时，刷新率和帧率上限跟随系统主屏设置；实际 FPS 仍受游戏版本和渲染器限制。\r\n" +
-                        "修改系统刷新率后请退出游戏再启动。无边框模式支持快速 Alt+Tab 和局内悬浮窗。";
-            tips.Bounds = new Rectangle(12, 418, 690, 64);
+            tips.Text = "仅窗口化 / 无边框全屏；开关均在退出游戏、下次通过助手启动后生效。联机前请关闭。\r\n" +
+                        "独立内置模块，不依赖高帧率；手动暂停仍保留。支持内置 1.20e 至 1.27b，需游戏音频组件加载。";
+            tips.Bounds = new Rectangle(12, 442, 690, 40);
             tips.ForeColor = Color.DimGray;
             tp.Controls.Add(tips);
 
@@ -1984,6 +1995,7 @@ namespace War3Helper
             chkIgnoreShort.Checked = cfg.IgnoreShortReplay;
             chkApm.Checked = cfg.ShowApm;
             chkOpenGL.Checked = cfg.UseOpenGL;
+            chkRunInBackground.Checked = cfg.RunInBackground;
             RefreshHighFpsUi();
             // 以注册表为准，不以我们自己的配置为准：玩家可能在游戏里自己改过
             chkAlwaysBars.Checked = War3Ctl.GetAlwaysHealthBars();

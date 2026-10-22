@@ -32,7 +32,8 @@ $srcs = @(Get-ChildItem (Join-Path $root "src") -Filter *.cs | ForEach-Object { 
 if ($srcs.Count -eq 0) { throw "no source files found under src\" }
 $mainArgs = @("/nologo", "/target:winexe", "/optimize+", "/platform:anycpu",
               ("/out:" + (Join-Path $out "War3Helper.exe")), ("/win32icon:" + $ico),
-              ("/resource:" + (Join-Path $obj 'native\War3HelperFps.mix') + ',War3Helper.HighFpsModule')) + $refs + $srcs
+              ("/resource:" + (Join-Path $obj 'native\War3HelperFps.mix') + ',War3Helper.HighFpsModule'),
+              ("/resource:" + (Join-Path $obj 'native\War3HelperBackground.mix') + ',War3Helper.BackgroundModule')) + $refs + $srcs
 Write-Host "compiling $($srcs.Count) source files..."
 & $csc $mainArgs
 if ($LASTEXITCODE -eq 0) { Write-Host "Build OK: $out\War3Helper.exe" } else { throw "build failed" }

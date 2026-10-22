@@ -11,6 +11,7 @@ static class TestMain
         failures += VersionSwitchTests.Run();
         failures += EngineTests.Run();
         failures += DisplayTests.Run();
+        failures += BackgroundRunTests.Run();
         int fpsPackageArg = Array.IndexOf(args, "--fps-package");
         failures += HighFpsTests.Run(fpsPackageArg >= 0 && fpsPackageArg + 1 < args.Length ? args[fpsPackageArg + 1] : null);
         int buildsArg = Array.IndexOf(args, "--fps-versions");

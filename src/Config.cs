@@ -105,6 +105,7 @@ namespace War3Helper
         public bool IgnoreShortReplay { get; set; }
         public bool ShowApm { get; set; }
         public bool UseOpenGL { get; set; }
+        public bool RunInBackground { get; set; } // 单机切出不暂停，下次通过助手启动生效
         // 血条常显。真实状态存在魔兽自己的注册表(Gameplay\healthbars)里，
         // 这里只记录"助手启动时要不要帮忙补开"。
         // 旧版还有个 ShowHpBars(一直按住Alt)，已删除 —— 副作用太大：
@@ -340,6 +341,7 @@ namespace War3Helper
 
         public void SetDefaults()
         {
+            RunInBackground = false;
             ConfigVersion = CurrentConfigVersion;
             RemapEnabled = true;
             ApplyToCombo = true;
